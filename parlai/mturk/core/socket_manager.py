@@ -207,17 +207,40 @@ class SocketManager():
         """Gives the name that this socket manager should use for its world"""
         return '[World_{}]'.format(self.task_group_id)
 
+    def _safe_send(self, data, force=False):
+        if not self.alive and not force:
+            # Try to wait a second to send a packet
+            timeout = 1
+            while timeout > 0 and not self.alive:
+                time.sleep(0.1)
+                timeout -= 0.1
+            if not self.alive:
+                # don't try to send a packet if we're still dead
+                return False
+        try:
+            self.ws.send(data)
+        except websocket.WebSocketConnectionClosedException:
+            # The channel died mid-send, wait for it to come back up
+            return False
+        return True
+
+    def _ensure_closed(self):
+        try:
+            self.ws.close()
+        except websocket.WebSocketConnectionClosedException:
+            pass
+
     def _send_world_alive(self):
         """Registers world with the passthrough server"""
-        self.ws.send(json.dumps({
+        self._safe_send(json.dumps({
             'type': data_model.SOCKET_AGENT_ALIVE_STRING,
             'content':
                 {'id': 'WORLD_ALIVE', 'sender_id': self.get_my_sender_id()},
-        }))
+        }), force=True)
 
     def _send_response_heartbeat(self, packet):
         """Sends a response heartbeat to an incoming heartbeat packet"""
-        self.ws.send(json.dumps({
+        self._safe_send(json.dumps({
             'type': data_model.SOCKET_ROUTE_PACKET_STRING,
             'content': packet.swap_sender().set_data('').as_dict()
         }))
@@ -225,10 +248,12 @@ class SocketManager():
     def _send_ack(self, packet):
         """Sends an ack to a given packet"""
         ack = packet.get_ack().as_dict()
-        self.ws.send(json.dumps({
+        result = self._safe_send(json.dumps({
             'type': data_model.SOCKET_ROUTE_PACKET_STRING,
             'content': ack,
         }))
+        if result:
+            packet.status = Packet.STATUS_SENT
 
     def _send_packet(self, packet, connection_id, send_time):
         """Sends a packet, blocks if the packet is blocking"""
@@ -236,13 +261,18 @@ class SocketManager():
         pkt = packet.as_dict()
         shared_utils.print_and_log(
             logging.DEBUG,
-            'Send packet: {}'.format(packet.data)
+            'Send packet: {}'.format(packet)
         )
 
-        self.ws.send(json.dumps({
+        result = self._safe_send(json.dumps({
             'type': data_model.SOCKET_ROUTE_PACKET_STRING,
             'content': pkt,
         }))
+        if not result:
+            # The channel died mid-send, wait for it to come back up
+            self._safe_put(connection_id, (send_time, packet))
+            return
+
         packet.status = Packet.STATUS_SENT
 
         # Handles acks and blocking
@@ -278,12 +308,11 @@ class SocketManager():
                 'Socket open: {}'.format(args)
             )
             self._send_world_alive()
-            self.alive = True
 
         def on_error(ws, error):
             try:
                 if error.errno == errno.ECONNREFUSED:
-                    ws.close()
+                    self._ensure_closed()
                     self.use_socket = False
                     raise Exception("Socket refused connection, cancelling")
                 else:
@@ -292,11 +321,13 @@ class SocketManager():
                         'Socket logged error: {}'.format(error),
                     )
             except BaseException:
+                if type(error) is websocket.WebSocketConnectionClosedException:
+                    return  # Connection closed is noop
                 shared_utils.print_and_log(
                     logging.WARN,
-                    'Socket logged string error: {} Restarting'.format(error),
+                    'Socket logged error: {} Restarting'.format(repr(error)),
                 )
-                ws.close()
+                self._ensure_closed()
 
         def on_disconnect(*args):
             """Disconnect event is a no-op for us, as the server reconnects
@@ -306,13 +337,14 @@ class SocketManager():
                 'World server disconnected: {}'.format(args)
             )
             self.alive = False
-            self.ws.close()
+            self._ensure_closed()
 
         def on_message(*args):
             """Incoming message handler for ACKs, ALIVEs, HEARTBEATs,
             and MESSAGEs"""
             packet_dict = json.loads(args[1])
             if packet_dict['type'] == 'conn_success':
+                self.alive = True
                 return  # No action for successful connection
             packet = Packet.from_dict(packet_dict['content'])
             if packet is None:
@@ -366,13 +398,13 @@ class SocketManager():
                         on_close=on_disconnect,
                     )
                     self.ws.on_open = on_socket_open
-                    self.ws.run_forever()
+                    self.ws.run_forever(ping_interval=1, ping_timeout=0.9)
                 except Exception as e:
                     shared_utils.print_and_log(
                         logging.WARN,
-                        'Socket had error {}, attempting restart'.format(e)
+                        'Socket error {}, attempting restart'.format(repr(e))
                     )
-                time.sleep(3)
+                time.sleep(0.2)
 
         # Start listening thread
         self.listen_thread = threading.Thread(
@@ -381,6 +413,13 @@ class SocketManager():
         )
         self.listen_thread.daemon = True
         self.listen_thread.start()
+        time.sleep(1.2)
+        while not self.alive:
+            try:
+                self._send_world_alive()
+            except Exception:
+                pass
+            time.sleep(0.8)
 
     def open_channel(self, worker_id, assignment_id):
         """Opens a channel for a worker on a given assignment, doesn't re-open

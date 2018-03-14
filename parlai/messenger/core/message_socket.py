@@ -17,7 +17,7 @@ MAX_QUICK_REPLIES = 10
 MAX_TEXT_CHARS = 640
 MAX_QUICK_REPLY_TITLE_CHARS = 20
 MAX_POSTBACK_CHARS = 1000
-
+SOCKET_TIMEOUT = 6
 
 # Arbitrary attachments can be created as long as they adhere to the docs
 # developers.facebook.com/docs/messenger-platform/send-messages/templates
@@ -141,6 +141,8 @@ class MessageSocket():
         self.message_callback = message_callback
 
         self.ws = None
+        self.last_pong = None
+        self.alive = False
         self.auth_args = {'access_token': secret_token}
 
         # initialize the state
@@ -150,18 +152,43 @@ class MessageSocket():
         self.keep_running = True
         self._setup_socket()
 
+    def _safe_send(self, data, force=False):
+        if not self.alive and not force:
+            # Try to wait a second to send a packet
+            timeout = 1
+            while timeout > 0 and not self.alive:
+                time.sleep(0.1)
+                timeout -= 0.1
+            if not self.alive:
+                # don't try to send a packet if we're still dead
+                return False
+        try:
+            self.ws.send(data)
+        except websocket.WebSocketConnectionClosedException:
+            # The channel died mid-send, wait for it to come back up
+            return False
+        return True
+
+    def _ensure_closed(self):
+        try:
+            self.ws.close()
+        except websocket.WebSocketConnectionClosedException:
+            pass
+
     def _send_world_alive(self):
         """Registers world with the passthrough server"""
-        self.ws.send(json.dumps({
+        self._safe_send(json.dumps({
             'type': 'world_alive',
             'content': {'id': 'WORLD_ALIVE', 'sender_id': 'world'},
-        }))
+        }), force=True)
 
     def send_fb_payload(self, receiver_id, payload):
         """Sends a payload to messenger, processes it if we can"""
         api_address = 'https://graph.facebook.com/v2.6/me/messages'
         if payload['type'] == 'list':
             data = create_compact_list_message(payload['data'])
+        elif payload['type'] in ['image', 'video', 'file', 'audio']:
+            data = create_attachment(payload['type'], payload['url'])    
         else:
             data = payload['data']
         message = {
@@ -224,25 +251,26 @@ class MessageSocket():
                 'Socket open: {}'.format(args)
             )
             self._send_world_alive()
-            self.alive = True
 
         def on_error(ws, error):
             try:
                 if error.errno == errno.ECONNREFUSED:
-                    ws.close()
+                    self._ensure_closed()
                     self.use_socket = False
                     raise Exception("Socket refused connection, cancelling")
                 else:
                     shared_utils.print_and_log(
                         logging.WARN,
-                        'Socket logged error: {}'.format(error),
+                        'Socket logged error: {}'.format(repr(error)),
                     )
             except BaseException:
+                if type(error) is websocket.WebSocketConnectionClosedException:
+                    return  # Connection closed is noop
                 shared_utils.print_and_log(
                     logging.WARN,
-                    'Socket logged string error: {} Restarting'.format(error),
+                    'Socket logged error: {} Restarting'.format(repr(error)),
                 )
-                ws.close()
+                self._ensure_closed()
 
         def on_disconnect(*args):
             """Disconnect event is a no-op for us, as the server reconnects
@@ -252,13 +280,17 @@ class MessageSocket():
                 'World server disconnected: {}'.format(args)
             )
             self.alive = False
-            self.ws.close()
+            self._ensure_closed()
 
         def on_message(*args):
             """Incoming message handler for messages from the FB user"""
             packet_dict = json.loads(args[1])
             if packet_dict['type'] == 'conn_success':
+                self.alive = True
                 return  # No action for successful connection
+            if packet_dict['type'] == 'pong':
+                self.last_pong = time.time()
+                return  # No further action for pongs
             message_data = packet_dict['content']
             shared_utils.print_and_log(
                 logging.DEBUG,
@@ -280,13 +312,13 @@ class MessageSocket():
                         on_close=on_disconnect,
                     )
                     self.ws.on_open = on_socket_open
-                    self.ws.run_forever()
+                    self.ws.run_forever(ping_interval=1, ping_timeout=0.9)
                 except Exception as e:
                     shared_utils.print_and_log(
                         logging.WARN,
-                        'Socket had error {}, attempting restart'.format(e)
+                        'Socket error {}, attempting restart'.format(repr(e))
                     )
-                time.sleep(3)
+                time.sleep(0.2)
 
         # Start listening thread
         self.listen_thread = threading.Thread(
@@ -295,3 +327,10 @@ class MessageSocket():
         )
         self.listen_thread.daemon = True
         self.listen_thread.start()
+        time.sleep(1.2)
+        while not self.alive:
+            try:
+                self._send_world_alive()
+            except Exception:
+                pass
+            time.sleep(0.8)

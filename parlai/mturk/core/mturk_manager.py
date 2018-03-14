@@ -267,17 +267,18 @@ class MTurkManager():
             agent.state.status = AssignState.STATUS_DISCONNECT
             # in conversation, inform others about disconnect
             conversation_id = agent.conversation_id
-            if agent in self.conv_to_agent[conversation_id]:
-                for other_agent in self.conv_to_agent[conversation_id]:
-                    if agent.assignment_id != other_agent.assignment_id:
-                        self._handle_partner_disconnect(
-                            other_agent.worker_id,
-                            other_agent.assignment_id
-                        )
-            if len(self.mturk_agent_ids) > 1:
-                # The user disconnected from inside a conversation with
-                # another turker, record this as bad behavoir
-                self._handle_bad_disconnect(worker_id)
+            if conversation_id in self.conv_to_agent:
+                if agent in self.conv_to_agent[conversation_id]:
+                    for other_agent in self.conv_to_agent[conversation_id]:
+                        if agent.assignment_id != other_agent.assignment_id:
+                            self._handle_partner_disconnect(
+                                other_agent.worker_id,
+                                other_agent.assignment_id
+                            )
+                if len(self.mturk_agent_ids) > 1:
+                    # The user disconnected from inside a conversation with
+                    # another turker, record this as bad behavoir
+                    self._handle_bad_disconnect(worker_id)
 
     def _handle_partner_disconnect(self, worker_id, assignment_id):
         """Send a message to a worker notifying them that a partner has
@@ -316,7 +317,7 @@ class MTurkManager():
                 change_callback=_push_worker_state
             )
 
-    def _setup_socket(self):
+    def _setup_socket(self, timeout_seconds=None):
         """Set up a socket_manager with defined callbacks"""
         self.socket_manager = SocketManager(
             self.server_url,
@@ -324,7 +325,8 @@ class MTurkManager():
             self._on_alive,
             self._on_new_message,
             self._on_socket_dead,
-            self.task_group_id
+            self.task_group_id,
+            socket_dead_timeout=timeout_seconds,
         )
 
     def _on_alive(self, pkt):
@@ -392,8 +394,10 @@ class MTurkManager():
             agent = curr_worker_state.agents[assign_id]
             agent.log_reconnect()
             if agent.state.status == AssignState.STATUS_NONE:
-                # Reconnecting before even being given a world. The retries
-                # for switching to the onboarding world should catch this
+                # Reconnecting before even being given a world. Kill the hit
+                # so that on a reconnect they can get a new one assigned and
+                # the resources of the first one are cleaned.
+                self.force_expire_hit(worker_id, assign_id)
                 return
             elif agent.state.status == AssignState.STATUS_ONBOARDING:
                 # Reconnecting to the onboarding world should either restore
@@ -501,7 +505,7 @@ class MTurkManager():
             logging.DEBUG,
             'Worker {} disconnected from {} in status {}'.format(
                 worker_id,
-                assignment_id,
+                agent.conversation_id,
                 agent.state.status
             )
         )
@@ -749,12 +753,12 @@ class MTurkManager():
         shared_utils.print_and_log(logging.INFO, "MTurk server setup done.\n",
                                    should_print=True)
 
-    def ready_to_accept_workers(self):
+    def ready_to_accept_workers(self, timeout_seconds=None):
         """Set up socket to start communicating to workers"""
         shared_utils.print_and_log(logging.INFO,
                                    'Local: Setting up WebSocket...',
                                    not self.is_test)
-        self._setup_socket()
+        self._setup_socket(timeout_seconds=timeout_seconds)
 
     def start_new_run(self):
         """Clear state to prepare for a new run"""
@@ -985,6 +989,10 @@ class MTurkManager():
         # Force messages to have a unique ID
         if 'message_id' not in data:
             data['message_id'] = str(uuid.uuid4())
+        conversation_id = None
+        agent = self._get_agent(receiver_id, assignment_id)
+        if agent is not None:
+            conversation_id = agent.conversation_id
         event_id = shared_utils.generate_event_id(receiver_id)
         packet = Packet(
             event_id,
@@ -993,6 +1001,7 @@ class MTurkManager():
             receiver_id,
             assignment_id,
             data,
+            conversation_id=conversation_id,
             blocking=blocking,
             ack_func=ack_func
         )
@@ -1004,7 +1013,6 @@ class MTurkManager():
         )
         # Push outgoing message to the message thread to be able to resend
         # on a reconnect event
-        agent = self._get_agent(receiver_id, assignment_id)
         if agent is not None:
             agent.state.messages.append(packet.data)
         self.socket_manager.queue_packet(packet)
@@ -1060,7 +1068,12 @@ class MTurkManager():
         client = mturk_utils.get_mturk_client(self.is_sandbox)
         try:
             response = client.get_assignment(AssignmentId=assignment_id)
-            return response['Assignment']['AssignmentStatus']
+            status = response['Assignment']['AssignmentStatus']
+            worker_id = self.assignment_to_worker_id[assignment_id]
+            agent = self._get_agent(worker_id, assignment_id)
+            if agent is not None and status == MTurkAgent.ASSIGNMENT_DONE:
+                agent.hit_is_complete = True
+            return status
         except ClientError as e:
             # If the assignment isn't done, asking for the assignment will fail
             not_done_message = ('This operation can be called with a status '
