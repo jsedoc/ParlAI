@@ -105,7 +105,7 @@ task_list = [
         "id": "MutualFriends",
         "display_name": "MutualFriends",
         "task": "mutualfriends",
-        "tags": [ "All", "Negotiation"],
+        "tags": [ "All", "Goal"],
         "description": "Task where two agents must discover which friend of theirs is mutual based on the friends's attributes. From He He et al. '17. Link: https://stanfordnlp.github.io/cocoa/'"
     },
     {
@@ -332,6 +332,13 @@ task_list = [
         "task": "iwslt14",
         "tags": ["All", "MT"],
         "description": "2014 International Workshop on Spoken Language task, currently only includes en_de and de_en. From Cettolo et al. '12. Link: wit3.fbk.eu"
+    },
+    {
+        "id": "ConvAI2",
+        "display_name": "ConvAI2",
+        "task": "convai2",
+        "tags": [ "All", "ChitChat" ],
+        "description": "A chit-chat dataset based on PersonaChat (https://arxiv.org/abs/1801.07243) for a NIPS 2018 competition. Link: http://convai.io/."
     },
     {
         "id": "ConvAI_ChitChat",

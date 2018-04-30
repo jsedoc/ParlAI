@@ -39,7 +39,7 @@ class Predictor(object):
         for k, v in kwargs.items():
             args.append('--' + str(k).replace('_', '-'))
             args.append(str(v))
-        parser = ParlaiParser(True, True, model_argv=args)
+        parser = ParlaiParser(True, True)
         self.opt = parser.parse_args(args)
         self.agent = create_agent(self.opt)
 
@@ -124,8 +124,8 @@ def flatten(teacher, context_length=-1, include_labels=True):
     """Return a flattened version of a teacher's data where all episodes only
     have length one but contain the desired amount of context.
 
-    If context_length is not None, will use only that many past utterances.
-    Default is None. Setting it to one only uses the input text.
+    If context_length is not -1, will use only that many past utterances.
+    Default is -1. Setting it to one only uses the input text.
 
     If include_labels is True, will include a random label in past utterances.
     Default is True.
@@ -179,7 +179,7 @@ def sort_data(data, key='text_label', method='spaces'):
 
     Currently the only supported key is sorting by first the text, then the
     label.
-    See https://arxiv.org/abs/1706.05765 for an evaulation of alternative
+    See https://arxiv.org/abs/1706.05765 for an evaluation of alternative
     approaches for machine translation.
     Sorting by the source (text) gives a good improvement in speed over random
     batching and is robust to different types of optimization.
@@ -348,9 +348,6 @@ class PaddingUtils(object):
             # zero examples to process in this batch, so zip failed to unpack
             return None, None, None, None, None, None
 
-        # set up the input tensors
-        bsz = len(exs)
-
         # `x` text is already tokenized and truncated
         # sort by length so we can use pack_padded
         if any(['text2vec' in ex for ex in exs]):
@@ -456,18 +453,22 @@ class PaddingUtils(object):
 
             if random.random() > (1 - report_freq):
                 # log sometimes
-                print('TEXT: ', observations[valid_inds[i]]['text'].replace('__END__', ''))
+                print('TEXT: ', observations[valid_inds[i]]['text'])
                 print('PREDICTION: ', curr_pred, '\n~')
         return
 
 
 class OffensiveLanguageDetector(object):
-    '''Detects offensive language using a list of offensive language and phrases
+    """Detects offensive language using a list of offensive language and phrases
     from https://github.com/LDNOOBW.
-    '''
+    """
+
     def __init__(self):
         import parlai.core.build_data as build_data
         from parlai.core.params import ParlaiParser
+        from parlai.core.dict import DictionaryAgent
+        self.tokenize = DictionaryAgent.split_tokenize
+
         parser = ParlaiParser(False, False)
 
         def _path():
@@ -496,21 +497,57 @@ class OffensiveLanguageDetector(object):
         self.datapath = os.path.join(parser.parlai_home, 'data')
         self.datafile = _path()
 
-        # read text file to generate list of offensive words
-        self.offensive_words = []
+        # store a token trie: e.g.
+        # {'2': {'girls': {'1': {'cup': {'__END__': True}}}}
+        self.END = '__END__'
+        self.offensive_trie = {}
+        self.max_len = 1
         with open(self.datafile, 'r') as f:
-            self.offensive_words += f.read().splitlines()
+            for p in f.read().splitlines():
+                self.add_phrase(p)
 
-    def add_words(self, word_list):
-        '''Add custom words to screen.'''
-        self.offensive_words += word_list
+    def add_phrase(self, phrase):
+        """Adds a single phrase to the trie."""
+        toks = self.tokenize(phrase)
+        curr = self.offensive_trie
+        for t in toks:
+            if t not in curr:
+                curr[t] = {}
+            curr = curr[t]
+        curr[self.END] = True
+        self.max_len = max(self.max_len, len(toks))
+
+    def add_words(self, phrase_list):
+        """Add list of custom phrases to the filter."""
+        for phrase in phrase_list:
+            self.add_phrase(phrase)
+
+    def check_sequence(self, toks, idx, node):
+        """Check if words from the sequence are in the trie.
+
+        This checks phrases made from
+        toks[i], toks[i:i+2] ... toks[i:i + self.max_len]
+        """
+        right = min(idx + self.max_len, len(toks))
+        for i in range(idx, right):
+            if toks[i] in node:
+                node = node[toks[i]]
+                if self.END in node:
+                    return ' '.join(toks[j] for j in range(idx, i + 1))
+            else:
+                break
+        return False
 
     def contains_offensive_language(self, text):
-        '''Determines if text contains any offensive words from the list.'''
-        # TODO : make this faster so we can support removing offensive words
-        # when creating a dictionary
-        lower_text = text.lower()
-        for word in self.offensive_words:
-            if word in lower_text:
-                return True
-        return False
+        """Determines if text contains any offensive words from the list."""
+        if type(text) is str:
+            toks = self.tokenize(text.lower())
+        elif type(text) is list or type(text) is tuple:
+            toks = text
+
+        for i in range(len(toks)):
+            res = self.check_sequence(toks, i, self.offensive_trie)
+            if res:
+                return res
+
+        return None

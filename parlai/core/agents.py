@@ -15,7 +15,7 @@
     the ``Teacher`` class.
 
     ``MultiTaskTeacher(Teacher)``
-    creates a set of teachers based on a "task string" passed to the ``Teacher``,
+    creates a set of teachers based on a task string passed to the ``Teacher``,
     creating multiple teachers within it and alternating between them.
 
 All agents are initialized with the following parameters:
@@ -83,9 +83,10 @@ class Agent(object):
     def reset_metrics(self):
         pass
 
-    def save(self):
+    def save(self, path=None):
         """If applicable, save any parameters needed to recreate this agent from
-        loaded parameters."""
+        loaded parameters.
+        """
         pass
 
     def share(self):
@@ -274,12 +275,19 @@ def name_to_agent_class(name):
     return class_name
 
 def load_agent_module(opt):
-    optfile =  opt['model_file'] + '.opt'
+    model_file = opt['model_file']
+    optfile =  model_file + '.opt'
     if os.path.isfile(optfile):
         with open(optfile, 'rb') as handle:
            new_opt = pickle.load(handle)
-        # override in case the file has been moved.
-        new_opt['model_file'] = opt['model_file']
+        # only override opts specified in 'override' dict
+        if opt.get('override'):
+            for k in opt['override']:
+                v = opt[k]
+                print("[ warning: overriding opt['" + str(k) + "'] to " + str(v) +
+                      " (previously:" + str(str(new_opt.get(k, None))) + ") ]")
+                new_opt[k] = v
+        new_opt['model_file'] = model_file
         model_class = get_agent_module(new_opt['model'])
         return model_class(new_opt)
     else:
@@ -301,19 +309,23 @@ def get_agent_module(dir_name):
     model_class = getattr(my_module, class_name)
     return model_class
 
-def create_agent(opt):
+
+def create_agent(opt, requireModelExists=False):
     """Create an agent from the options ``model``, ``model_params`` and ``model_file``.
     The input is either of the form ``parlai.agents.ir_baseline.agents:IrBaselineAgent``
     (i.e. the path followed by the class name) or else just ``ir_baseline`` which
     assumes the path above, and a class name suffixed with 'Agent'.
 
-    If ``model-file'' is available in the options this function can also attempt to load
+    If ``model-file`` is available in the options this function can also attempt to load
     the model from that location instead. This avoids having to specify all the other
     options necessary to set up the model including its name as they are all loaded from
     the options file if it exists (the file opt['model_file'] + '.opt' must exist and
     contain a pickled dict containing the model's options).
     """
     if opt.get('model_file'):
+        if requireModelExists and not os.path.isfile(opt['model_file']):
+            raise RuntimeError('WARNING: Model file does not exist, check to make '
+                               'sure it is correct: {}'.format(opt['model_file']))
         # Attempt to load the model from the model file first (this way we do not even
         # have to specify the model name as a parameter.
         model = load_agent_module(opt)
@@ -321,9 +333,14 @@ def create_agent(opt):
             return model
         else:
             print("[ no model with opt yet at: " + opt.get('model_file') + "(.opt) ]")
+
     if opt.get('model'):
         model_class = get_agent_module(opt['model'])
-        return model_class(opt)
+        model = model_class(opt)
+        if requireModelExists and hasattr(model, 'load'):
+            # double check that we didn't forget to set model_file on loadable model
+            print('WARNING: model_file unset but model has a `load` function.')
+        return model
     else:
         raise RuntimeError('Need to set `model` argument to use create_agent.')
 

@@ -25,6 +25,7 @@ class MessengerAgent(Agent):
         self.observed_packets = {}
         self.msg_queue = Queue()
         self.stored_data = {}
+        self.message_partners = []
         # initialize stored data
         self.set_stored_data()
 
@@ -52,6 +53,10 @@ class MessengerAgent(Agent):
             print(
                 '{} could not be extracted to an observed message'.format(resp)
             )
+
+    def observe_typing_on(self):
+        """Allow agent to observe typing indicator"""
+        self.manager.message_socket.typing_on(self.id)
 
     def put_data(self, message):
         """Put data into the message queue if it hasn't already been seen"""
