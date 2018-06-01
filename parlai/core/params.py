@@ -13,6 +13,7 @@ import os
 import sys
 from parlai.core.agents import get_agent_module, get_task_module
 from parlai.tasks.tasks import ids_to_tasks
+from parlai.core.build_data import modelzoo_path
 
 
 def str2bool(value):
@@ -44,19 +45,6 @@ def class2str(value):
     s = ':'.join(s.rsplit('.', 1))  # replace last period with ':'
     return s
 
-
-def modelzoo_path(datapath, path):
-    """If path starts with 'models', then we remap it to the model zoo path
-    within the data directory (default is ParlAI/data/models).
-    ."""
-    if path is None:
-        return None
-    if not path.startswith('models:'):
-        return path
-    else:
-        return os.path.join(datapath, 'models', path[7:])
-
-
 class ParlaiParser(argparse.ArgumentParser):
     """Pseudo-extension of ``argparse`` which sets a number of parameters
     for the ParlAI framework. More options can be added specific to other
@@ -85,6 +73,7 @@ class ParlaiParser(argparse.ArgumentParser):
 
         # remember which args were specified on the command line
         self.cli_args = sys.argv
+        self.overridable = {}
 
         if add_parlai_args:
             self.add_parlai_args()
@@ -324,7 +313,7 @@ class ParlaiParser(argparse.ArgumentParser):
 
     def add_extra_args(self, args=None):
         """Add more args depending on how known args are set."""
-        parsed = vars(self.parse_known_args(nohelp=True)[0])
+        parsed = vars(self.parse_known_args(args, nohelp=True)[0])
 
         # find which image mode specified if any, and add additional arguments
         image_mode = parsed.get('image_mode', None)
@@ -335,6 +324,9 @@ class ParlaiParser(argparse.ArgumentParser):
         task = parsed.get('task', None)
         if task is not None:
             self.add_task_args(task)
+        evaltask = parsed.get('evaltask', None)
+        if evaltask is not None:
+            self.add_task_args(evaltask)
 
         # find which model specified if any, and add its specific arguments
         model = parsed.get('model', None)
@@ -402,19 +394,21 @@ class ParlaiParser(argparse.ArgumentParser):
                             store_true.append(option)
                         elif '_StoreFalseAction' in str(type(a)):
                             store_false.append(option)
-        override = {}
+
         for i in range(len(self.cli_args)):
             if self.cli_args[i] in option_strings_dict:
                 if self.cli_args[i] in store_true:
-                    override[option_strings_dict[self.cli_args[i]]] = True
+                    self.overridable[option_strings_dict[self.cli_args[i]]] = \
+                        True
                 elif self.cli_args[i] in store_false:
-                    override[option_strings_dict[self.cli_args[i]]] = False
+                    self.overridable[option_strings_dict[self.cli_args[i]]] = \
+                        False
                 else:
                     if i < (len(self.cli_args) - 1) and \
                             self.cli_args[i+1][0] != '-':
-                        override[option_strings_dict[self.cli_args[i]]] = \
+                        self.overridable[option_strings_dict[self.cli_args[i]]] = \
                             self.cli_args[i+1]
-        self.opt['override'] = override
+        self.opt['override'] = self.overridable
 
         if print_args:
             self.print_args()
@@ -441,3 +435,9 @@ class ParlaiParser(argparse.ArgumentParser):
                         print('[ ' + group.title + ': ] ')
                     count += 1
                     print('[  ' + key + ': ' + values[key] + ' ]')
+
+    def set_params(self, **kwargs):
+        """Set overridable kwargs."""
+        self.set_defaults(**kwargs)
+        for k, v in kwargs.items():
+            self.overridable[k] = v

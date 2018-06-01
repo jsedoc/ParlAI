@@ -56,7 +56,7 @@ def eval_model(opt, printargs=None, print_parser=None):
     # Create model and assign it to the specified task
     agent = create_agent(opt, requireModelExists=True)
     world = create_task(opt, agent)
-
+  
     if print_parser:
         # Show arguments after loading model
         print_parser.opt = agent.opt
@@ -73,7 +73,6 @@ def eval_model(opt, printargs=None, print_parser=None):
         cnt += 1
         world.parley()
         if opt['display_examples']:
-            print("---")
             print(world.display() + "\n~~")
         if log_time.time() > log_every_n_secs:
             tot_time += log_time.time()

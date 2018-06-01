@@ -37,6 +37,7 @@ This module also provides a utility method:
 
 """
 
+from parlai.core.build_data import modelzoo_path
 from .metrics import Metrics, aggregate_metrics
 import copy
 import importlib
@@ -276,16 +277,21 @@ def name_to_agent_class(name):
 
 def load_agent_module(opt):
     model_file = opt['model_file']
-    optfile =  model_file + '.opt'
+    optfile = model_file + '.opt'
     if os.path.isfile(optfile):
         with open(optfile, 'rb') as handle:
-           new_opt = pickle.load(handle)
+            new_opt = pickle.load(handle)
         # only override opts specified in 'override' dict
         if opt.get('override'):
             for k in opt['override']:
                 v = opt[k]
-                print("[ warning: overriding opt['" + str(k) + "'] to " + str(v) +
-                      " (previously:" + str(str(new_opt.get(k, None))) + ") ]")
+                if str(v) != str(str(new_opt.get(k, None))):
+                    print("[ warning: overriding opt['" + str(k) + "'] to " +
+                          str(v) + " (previously:" +
+                          str(str(new_opt.get(k, None))) + ") ]")
+                new_opt[k] = v
+        for k, v in opt.items():
+            if k not in new_opt:
                 new_opt[k] = v
         new_opt['model_file'] = model_file
         model_class = get_agent_module(new_opt['model'])
@@ -294,16 +300,22 @@ def load_agent_module(opt):
         return None
 
 def get_agent_module(dir_name):
+    repo = 'parlai'
+    if dir_name.startswith('internal:'):
+        # To switch to local repo, useful for non-public projects
+        # (make a directory called 'parlai_internal' with your private agents)
+        repo = 'parlai_internal'
+        dir_name = dir_name[9:]
     if ':' in dir_name:
         s = dir_name.split(':')
         module_name = s[0]
         class_name = s[1]
     elif '/' in dir_name:
         sp = dir_name.split('/')
-        module_name = "parlai.agents.%s.%s" % (sp[0], sp[1])
+        module_name = "%s.agents.%s.%s" % (repo, sp[0], sp[1])
         class_name = name_to_agent_class(sp[1])
     else:
-        module_name = "parlai.agents.%s.%s" % (dir_name, dir_name)
+        module_name = "%s.agents.%s.%s" % (repo, dir_name, dir_name)
         class_name = name_to_agent_class(dir_name)
     my_module = importlib.import_module(module_name)
     model_class = getattr(my_module, class_name)
@@ -322,7 +334,16 @@ def create_agent(opt, requireModelExists=False):
     the options file if it exists (the file opt['model_file'] + '.opt' must exist and
     contain a pickled dict containing the model's options).
     """
+    if opt.get('datapath', None) is None:
+        # add datapath, it is missing
+        from parlai.core.params import ParlaiParser
+        parser = ParlaiParser(add_parlai_args=False)
+        parser.add_parlai_data_path()
+        opt_parser = parser.parse_args("", print_args=False)
+        opt['datapath'] = opt_parser['datapath']
+
     if opt.get('model_file'):
+        opt['model_file'] = modelzoo_path(opt.get('datapath'), opt['model_file'])
         if requireModelExists and not os.path.isfile(opt['model_file']):
             raise RuntimeError('WARNING: Model file does not exist, check to make '
                                'sure it is correct: {}'.format(opt['model_file']))
@@ -337,7 +358,7 @@ def create_agent(opt, requireModelExists=False):
     if opt.get('model'):
         model_class = get_agent_module(opt['model'])
         model = model_class(opt)
-        if requireModelExists and hasattr(model, 'load'):
+        if requireModelExists and hasattr(model, 'load') and not opt.get('model_file'):
             # double check that we didn't forget to set model_file on loadable model
             print('WARNING: model_file unset but model has a `load` function.')
         return model
@@ -361,14 +382,21 @@ def create_agents_from_shared(shared):
 
 def get_task_module(taskname):
     # get the module of the task agent
-    sp = taskname.strip().split(':')
+    sp = taskname.strip()
+    repo = 'parlai'
+    if sp.startswith('internal:'):
+        # To switch to local repo, useful for non-public projects
+        # (make a directory called 'parlai_internal' with your private agents)
+        repo = 'parlai_internal'
+        sp = sp[9:]
+    sp = sp.split(':')
     if '.' in sp[0]:
         module_name = sp[0]
     elif sp[0] == 'pytorch_teacher':
         module_name = 'parlai.core.pytorch_data_teacher'
     else:
         task = sp[0].lower()
-        module_name = "parlai.tasks.%s.agents" % (task)
+        module_name = "%s.tasks.%s.agents" % (repo, task)
     if len(sp) > 1:
         sp[1] = sp[1][0].upper() + sp[1][1:]
         teacher = sp[1]
@@ -421,7 +449,14 @@ def _create_task_agents(opt):
     (This saves the task creator bothering to define the
     create_agents function when it is not needed.)
     """
-    sp = opt['task'].strip().split(':')
+    sp = opt['task'].strip()
+    repo = 'parlai'
+    if sp.startswith('internal:'):
+        # To switch to local repo, useful for non-public projects
+        # (make a directory called 'parlai_internal' with your private agents)
+        repo = 'parlai_internal'
+        sp = sp[9:]
+    sp = sp.split(':')
     if '.' in sp[0]:
         # The case of opt['task'] = 'parlai.tasks.squad.agents:DefaultTeacher'
         # (i.e. specifying your own path directly)
@@ -430,7 +465,7 @@ def _create_task_agents(opt):
         module_name = 'parlai.core.pytorch_data_teacher'
     else:
         task = sp[0].lower()
-        module_name = "parlai.tasks.%s.agents" % (task)
+        module_name = "%s.tasks.%s.agents" % (repo, task)
     my_module = importlib.import_module(module_name)
     try:
         # Tries to call the create_agent function in agents.py
