@@ -15,11 +15,10 @@ if __name__ == '__main__':
     parser = setup_args()
     parser.set_defaults(
         task='convai2:self',
-        model='seq2seq',
+        model='legacy:seq2seq:0',
         model_file='/tmp/convai2_self_seq2seq_model',
-        dict_file='/tmp/dict_convai2_self',
         dict_lower=True,
-        dict_include_valid=True,
+        dict_include_valid=False,
         dict_maxexs=-1,
         datatype='train',
         batchsize=64,
@@ -42,5 +41,6 @@ if __name__ == '__main__':
         validation_metric_mode='min',
         validation_patience=12,
         log_every_n_secs=10,
+        dict_tokenizer='split',
     )
     TrainLoop(parser).train()

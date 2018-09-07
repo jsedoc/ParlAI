@@ -1,4 +1,7 @@
 <h2>News</h2>
+2018-08-29: Added new cleaner version of seq2seq model with new TorchAgent parent class, along with folder (parlai/legacy_agents) for deprecated model code
+
+2018-07-17: Added [Qangaroo](http://qangaroo.cs.ucl.ac.uk/) (a.k.a. WikiHop and MedHop), two reading comprehension datasets with multiple hops, and [SQuAD 2](https://rajpurkar.github.io/SQuAD-explorer/).
 
 2018-05-22: Two new tasks added: [COCO Image Captioning](http://cocodataset.org/#captions-2015) and [Flickr30k Entities](http://web.engr.illinois.edu/~bplumme2/Flickr30kEntities/)
 

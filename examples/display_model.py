@@ -1,4 +1,4 @@
-# Copyright 2004-present Facebook. All Rights Reserved.
+# Copyright (c) 2017-present, Facebook, Inc.
 # All rights reserved.
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree. An additional grant
@@ -18,12 +18,15 @@ from parlai.core.worlds import create_task
 
 import random
 
+
 def main():
     random.seed(42)
 
     # Get command line arguments
     parser = ParlaiParser(True, True)
     parser.add_argument('-n', '--num-examples', default=10)
+    # by default we want to display info about the validation set
+    parser.set_defaults(datatype='valid')
     opt = parser.parse_args()
 
     # Create model and assign it to the specified task
@@ -38,6 +41,7 @@ def main():
             if world.epoch_done():
                 print("EPOCH DONE")
                 break
+
 
 if __name__ == '__main__':
     main()

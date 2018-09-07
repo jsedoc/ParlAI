@@ -4,11 +4,20 @@
 # LICENSE file in the root directory of this source tree. An additional grant
 # of patent rights can be found in the PATENTS file in the same directory.
 
+try:
+    import regex  # noqa: F401
+    import scipy  # noqa: F401
+    import sklearn  # noqa: F401
+    import unicodedata  # noqa: F401
+    import pexpect  # noqa: F401
+except ImportError:
+    raise ImportError('Please `pip install regex scipy sklearn pexpect`'
+                      ' to use the tfidf_retriever agent.')
+
 from parlai.core.agents import Agent
 from parlai.core.utils import AttrDict
 from .doc_db import DocDB
 from .tfidf_doc_ranker import TfidfDocRanker
-from .build_db import store_contents as build_db
 from .build_tfidf import run as build_tfidf
 from .build_tfidf import live_count_matrix, get_tfidf_matrix
 from numpy.random import choice
@@ -16,8 +25,8 @@ from collections import deque
 import math
 import random
 import os
-import sqlite3
 import pickle
+import sqlite3
 
 
 class TfidfRetrieverAgent(Agent):
@@ -56,11 +65,27 @@ class TfidfRetrieverAgent(Agent):
             help='String option specifying tokenizer type to use '
                  '(e.g. "corenlp")')
         parser.add_argument(
+            '--retriever-num-retrieved', default=5, type=int,
+            help='How many docs to retrieve.')
+        parser.add_argument(
             '--retriever-mode', choices=['keys', 'values'], default='values',
             help='Whether to retrieve the stored key or the stored value.'
         )
-        parser.add_argument('--remove-title', type='bool', default=False,
+        parser.add_argument(
+            '--remove-title', type='bool', default=False,
             help='Whether to remove the title from the retrieved passage')
+        parser.add_argument(
+            '--retriever-mode', choices=['keys', 'values'], default='values',
+            help='Whether to retrieve the stored key or the stored value. For '
+                 'example, if you want to return the text of an example, use '
+                 'keys here; if you want to return the label, use values here.'
+        )
+        parser.add_argument(
+            '--index-by-int-id', type='bool', default=True,
+            help='Whether to index into database by doc id as an integer. This \
+                  defaults to true for DBs built using ParlAI; for the DrQA \
+                  wiki dump, it is necessary to set this to False to \
+                  index into the DB appropriately')
 
     def __init__(self, opt, shared=None):
         super().__init__(opt, shared)
@@ -117,6 +142,8 @@ class TfidfRetrieverAgent(Agent):
         self.training = False
 
     def doc2txt(self, docid):
+        if not self.opt.get('index_by_int_id', True):
+            docid = self.ranker.get_doc_id(docid)
         if self.ret_mode == 'keys':
             return self.db.get_doc_text(docid)
         elif self.ret_mode == 'values':
@@ -124,7 +151,6 @@ class TfidfRetrieverAgent(Agent):
         else:
             raise RuntimeError('Retrieve mode {} not yet supported.'.format(
                 self.ret_mode))
-
 
     def rebuild(self):
         if len(self.triples_to_add) > 0:
@@ -187,9 +213,10 @@ class TfidfRetrieverAgent(Agent):
             return self.train_act()
         if 'text' in obs:
             self.rebuild()  # no-op if nothing has been queued to store
-            doc_ids, doc_scores = self.ranker.closest_docs(obs['text'], k=30)
+            doc_ids, doc_scores = self.ranker.closest_docs(obs['text'],
+                                                           self.opt.get('retriever_num_retrieved', 5))
 
-            if False and obs.get('label_candidates'): #TODO: Alex (doesn't work)
+            if False and obs.get('label_candidates'):  # TODO: Alex (doesn't work)
                 # these are better selection than stored facts
                 # rank these options instead
                 cands = obs['label_candidates']
@@ -204,7 +231,9 @@ class TfidfRetrieverAgent(Agent):
                         ),
                         c_list
                     )
-                c_ids, c_scores = self.ranker.closest_docs(obs['text'], k=30, matrix=self.cands_hash[cands_id][0])
+                c_ids, c_scores = self.ranker.closest_docs(obs['text'],
+                                                           self.opt.get('retriever_num_retrieved', 5),
+                                                           matrix=self.cands_hash[cands_id][0])
                 reply['text_candidates'] = [self.cands_hash[cands_id][1][cid] for cid in c_ids]
                 reply['candidate_scores'] = c_scores
                 if len(reply['text_candidates']) > 0:

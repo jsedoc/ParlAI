@@ -33,14 +33,13 @@ def next_word_probability(self, partial_out):
     ['hello'] => {'world': 1.0}
 """
 
-from parlai.core.agents import Agent, create_agent, create_agents_from_shared
-from parlai.core.build_data import download_models
-from parlai.core.dict import DictionaryAgent
+from parlai.core.agents import create_agent, create_agents_from_shared
 from parlai.core.params import ParlaiParser
 from parlai.core.utils import Timer, round_sigfigs, no_lock
 from parlai.core.thread_utils import SharedTable
 from parlai.core.worlds import create_task, World
 
+import copy
 import math
 
 
@@ -85,7 +84,7 @@ class PerplexityWorld(World):
             if not hasattr(self.agent, 'next_word_probability'):
                 raise RuntimeError('Agent must implement function '
                                    '`next_word_probability`.')
-            self.metrics = {'total': 0, 'loss': 0.0, 'num_tokens': 0, 'num_unk': 0}
+            self.metrics = {'exs': 0, 'loss': 0.0, 'num_tokens': 0, 'num_unk': 0}
             if opt.get('numthreads', 1) > 1:
                 self.metrics = SharedTable(self.metrics)
         self.agents = [self.task, self.agent, self.dict]
@@ -123,7 +122,7 @@ class PerplexityWorld(World):
                 # get probability of correct answer, divide by total prob mass
                 prob_true = probs.get(parsed[i], 0)
                 if prob_true > 0:
-                    prob_true /= sum(probs.values())
+                    prob_true /= sum((probs.get(k, 0) for k in self.dict.keys()))
                     loss -= math.log(prob_true)
                 else:
                     loss = float('inf')
@@ -131,7 +130,7 @@ class PerplexityWorld(World):
             else:
                 num_unk += 1
         with self._lock():
-            self.metrics['total'] += 1
+            self.metrics['exs'] += 1
             self.metrics['loss'] += loss
             self.metrics['num_tokens'] += num_tokens
             self.metrics['num_unk'] += num_unk
@@ -152,7 +151,7 @@ class PerplexityWorld(World):
 
     def reset_metrics(self):
         with self._lock():
-            self.metrics['total'] = 0
+            self.metrics['exs'] = 0
             self.metrics['loss'] = 0
             self.metrics['num_tokens'] = 0
             self.metrics['num_unk'] = 0
@@ -160,8 +159,8 @@ class PerplexityWorld(World):
     def report(self, compute_time=None):
         m = {}
         with self._lock():
-            m['total'] = self.metrics['total']
-            if m['total'] > 0:
+            m['exs'] = self.metrics['exs']
+            if m['exs'] > 0:
                 # m['num_unk'] = self.metrics['num_unk']
                 # m['num_tokens'] = self.metrics['num_tokens']
                 m['loss'] = round_sigfigs(self.metrics['loss'] / self.metrics['num_tokens'], 3)
@@ -169,18 +168,37 @@ class PerplexityWorld(World):
         return m
 
 
-def eval_ppl(opt, build_dict):
+def eval_ppl(opt, build_dict=None, dict_file=None):
     """Evaluates the the perplexity of a model.
 
-    See the documentation for this file for more info.
+    This uses a dictionary which implements the following functions:
+    - tokenize(text): splits string up into list of tokens
+    - __in__(text): checks whether dictionary contains a token
+    - keys(): returns an iterator over all tokens in the dictionary
 
     :param opt: option dict
-    :param build_dict: function for building official dictionary.
-        note that this function does not use the opt passed into eval_ppl,
-        but rather should have hardcoded settings for its dictionary.
+    :param build_dict: function which returns a dictionary class implementing
+        the functions above.
+    :param dict_file: file used when loading the dictionary class set via the
+        "dictionary_class" argument (defaults to
+        parlai.core.dict:DictionaryAgent).
 
+    Either build_dict or dict_file must be set (both default to None) to
+    determine the dictionary used for the evaluation.
     """
-    dict_agent = build_dict()
+    if not build_dict and not dict_file:
+        raise RuntimeError('eval_ppl script either needs a dictionary build '
+                           'function or a dictionary file.')
+
+    if build_dict:
+        dict_agent = build_dict()
+    else:
+        dict_opt = copy.deepcopy(opt)
+        dict_opt['model'] = dict_opt.get('dictionary_class', 'parlai.core.dict:DictionaryAgent')
+        dict_opt['model_file'] = dict_file
+        if 'override' in dict_opt:
+            del dict_opt['override']
+        dict_agent = create_agent(dict_opt, requireModelExists=True)
 
     # create agents
     agent = create_agent(opt)
@@ -198,7 +216,7 @@ def eval_ppl(opt, build_dict):
             report = world.report()
             print('{}s elapsed, {}%% complete, {}'.format(
                 int(tot_time),
-                round_sigfigs(report['total'] / world.num_examples() * 100, 3),
+                round_sigfigs(report['exs'] / world.num_examples() * 100, 3),
                 report))
             log_time.reset()
     print('EPOCH DONE')
@@ -206,7 +224,7 @@ def eval_ppl(opt, build_dict):
     final_report = world.report()
     print('{}s elapsed: {}'.format(int(tot_time), final_report))
     print("============================")
-    print("FINAL PPL: " +str(final_report['ppl']))
+    print("FINAL PPL: " + str(final_report['ppl']))
     if final_report.get('ppl', 0) == float('inf'):
         print('Note: you got inf perplexity. Consider adding (or raising) the '
               'minimum probability you assign to each possible word. If you '

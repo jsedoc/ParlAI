@@ -7,14 +7,13 @@
 from parlai.core.agents import Agent
 from parlai.core.dict import DictionaryAgent
 from parlai.core.utils import PaddingUtils, round_sigfigs
+from parlai.core.thread_utils import SharedTable
 from .modules import RNNModel
 
 import torch
 from torch.autograd import Variable
-from torch import optim
 import torch.nn as nn
 
-import copy
 import os
 import math
 import pickle
@@ -104,15 +103,15 @@ class LanguageModelAgent(Agent):
             opt = self.opt
             self.dict = shared['dict']
 
-            if 'model' in shared:
-                # model is shared during hogwild
-                self.model = shared['model']
-                self.states = shared['states']
-                self.metrics = shared['metrics']
+            self.model = shared['model']
+            self.metrics = shared['metrics']
 
             # get NULL token and END token
             self.NULL_IDX = self.dict[self.dict.null_token]
             self.END_IDX = self.dict[self.dict.end_token]
+
+            if 'states' in shared:
+                self.states = shared['states']
 
             if self.use_person_tokens:
                 # add person1 and person2 tokens
@@ -184,37 +183,35 @@ class LanguageModelAgent(Agent):
 
         self.is_training = True
 
-        if hasattr(self, 'model'):
-            # if model was built, do more setup
-            self.clip = opt.get('gradient_clip', 0.25)
-            # set up criteria
-            self.criterion = nn.CrossEntropyLoss(ignore_index=self.NULL_IDX,
-                                                 size_average=False)
-            if self.use_cuda:
-                # push to cuda
-                self.criterion.cuda()
-            # init hidden state
-            self.hidden = self.model.init_hidden(self.batchsize)
-            # init tensor of end tokens
-            self.ends = torch.LongTensor([self.END_IDX for _ in range(self.batchsize)])
-            if self.use_cuda:
-                self.ends = self.ends.cuda()
-            # set up model and learning rate scheduler parameters
-            self.lr = opt['learningrate']
-            self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr)
-            self.best_val_loss = self.states.get('best_val_loss', None)
-            self.lr_factor = opt['lr_factor']
-            if self.lr_factor < 1.0:
-                self.lr_patience = opt['lr_patience']
-                self.lr_min = opt['lr_minimum']
-                self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                    self.optimizer, factor=self.lr_factor, verbose=True,
-                    patience=self.lr_patience, min_lr=self.lr_min)
-                # initial step for scheduler if self.best_val_loss is initialized
-                if self.best_val_loss is not None:
-                    self.scheduler.step(self.best_val_loss)
-            else:
-                self.scheduler = None
+        self.clip = opt.get('gradient_clip', 0.25)
+        # set up criteria
+        self.criterion = nn.CrossEntropyLoss(ignore_index=self.NULL_IDX,
+                                             size_average=False)
+        if self.use_cuda:
+            # push to cuda
+            self.criterion.cuda()
+        # init hidden state
+        self.hidden = self.model.init_hidden(self.batchsize)
+        # init tensor of end tokens
+        self.ends = torch.LongTensor([self.END_IDX for _ in range(self.batchsize)])
+        if self.use_cuda:
+            self.ends = self.ends.cuda()
+        # set up model and learning rate scheduler parameters
+        self.lr = opt['learningrate']
+        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr)
+        self.best_val_loss = self.states.get('best_val_loss', None)
+        self.lr_factor = opt['lr_factor']
+        if self.lr_factor < 1.0:
+            self.lr_patience = opt['lr_patience']
+            self.lr_min = opt['lr_minimum']
+            self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer, factor=self.lr_factor, verbose=True,
+                patience=self.lr_patience, min_lr=self.lr_min)
+            # initial step for scheduler if self.best_val_loss is initialized
+            if self.best_val_loss is not None:
+                self.scheduler.step(self.best_val_loss)
+        else:
+            self.scheduler = None
 
         self.reset()
 
@@ -283,19 +280,23 @@ class LanguageModelAgent(Agent):
         shared['dict'] = self.dict
         shared['NULL_IDX'] = self.NULL_IDX
         shared['END_IDX'] = self.END_IDX
-        shared['metrics'] = self.metrics
         shared['model'] = self.model
-        self.model.share_memory()
-        shared['states'] = {  # only need to pass optimizer states
-            'optimizer': self.optimizer.state_dict(),
-        }
+        if self.opt.get('numthreads', 1) > 1:
+            if type(self.metrics) == dict:
+                # move metrics and model to shared memory
+                self.metrics = SharedTable(self.metrics)
+                self.model.share_memory()
+            shared['states'] = {  # only need to pass optimizer states
+                'optimizer': self.optimizer.state_dict(),
+            }
+        shared['metrics'] = self.metrics
         return shared
 
     def observe(self, observation):
         """Save observation for act.
         If multiple observations are from the same episode, concatenate them.
         """
-        #shallow copy observation (deep copy can be expensive)
+        # shallow copy observation (deep copy can be expensive)
         obs = observation.copy()
         seq_len = self.opt['seq_len']
         is_training = True
@@ -311,7 +312,11 @@ class LanguageModelAgent(Agent):
                 self.next_observe += vec
             if 'labels' in obs:
                 if self.use_person_tokens:
-                    labels = ['PERSON2 ' + label for label in obs['labels'] if label != '']
+                    labels = [
+                        'PERSON2 ' + label
+                        for label in obs['labels']
+                        if label != ''
+                    ]
                     obs['labels'] = tuple(labels)
                 vec = self.parse(obs['labels'][0])
                 vec.append(self.END_IDX)
@@ -338,7 +343,11 @@ class LanguageModelAgent(Agent):
                     obs['text'] = 'PERSON1 ' + obs['text']
             if 'eval_labels' in obs:
                 if self.use_person_tokens:
-                    eval_labels = ['PERSON2 ' + label for label in obs['eval_labels'] if label != '']
+                    eval_labels = [
+                        'PERSON2 ' + label
+                        for label in obs['eval_labels']
+                        if label != ''
+                    ]
                     obs['eval_labels'] = tuple(eval_labels)
             self.observation = obs
             return obs
@@ -363,19 +372,23 @@ class LanguageModelAgent(Agent):
             return loss
 
         # feed in inputs without end token
-        output, hidden = self.model(data.transpose(0,1), hidden)
+        output, hidden = self.model(data.transpose(0, 1), hidden)
         self.hidden = self.repackage_hidden(hidden)
         # feed in end tokens
-        output, hidden = self.model(Variable(self.ends[:bsz].view(1,bsz)), self.hidden)
+        output, hidden = self.model(Variable(self.ends[:bsz].view(1, bsz)), self.hidden)
         self.hidden = self.repackage_hidden(hidden)
         output_flat = output.view(-1, len(self.dict))
-        loss += self.criterion(output_flat, targets.select(1,0).view(-1)).data
+        loss += self.criterion(output_flat, targets.select(1, 0).view(-1)).data
 
         for i in range(1, targets.size(1)):
-            output, hidden = self.model(targets.select(1,i-1).view(1, bsz), self.hidden, no_pack=True)
+            output, hidden = self.model(
+                targets.select(1, i - 1).view(1, bsz),
+                self.hidden,
+                no_pack=True
+            )
             self.hidden = self.repackage_hidden(hidden)
             output_flat = output.view(-1, len(self.dict))
-            loss += self.criterion(output_flat, targets.select(1,i).view(-1)).data
+            loss += self.criterion(output_flat, targets.select(1, i).view(-1)).data
 
         return loss
 
@@ -390,15 +403,20 @@ class LanguageModelAgent(Agent):
         hidden = self.model.init_hidden(bsz)
 
         i = 0
+        word_idx = None
         while total_done < bsz and i <= self.opt['truncate_pred']:
             if i == 0:
                 # feed in input without end tokens
-                output, hidden = self.model(data.transpose(0,1), hidden)
+                output, hidden = self.model(data.transpose(0, 1), hidden)
                 hidden = self.repackage_hidden(hidden)
                 # feed in end tokens
-                output, hidden = self.model(Variable(self.ends[:bsz].view(1,bsz)), hidden)
+                output, hidden = self.model(
+                    Variable(self.ends[:bsz].view(1, bsz)), hidden
+                )
             else:
-                output, hidden = self.model(Variable(word_idx.view(1, bsz)), hidden, no_pack=True)
+                output, hidden = self.model(
+                    Variable(word_idx.view(1, bsz)), hidden, no_pack=True
+                )
             hidden = self.repackage_hidden(hidden)
             word_weights = output.squeeze().data.exp()
             if bsz > 1:
@@ -431,7 +449,7 @@ class LanguageModelAgent(Agent):
             token_list.append(word_idx.view(bsz, 1))
             i += 1
 
-        return torch.cat(token_list,1)
+        return torch.cat(token_list, 1)
 
     def predict(self, data, hidden, targets=None, is_training=True, y_lens=None):
         """Produce a prediction from our model."""
@@ -479,8 +497,8 @@ class LanguageModelAgent(Agent):
                 data_list = []
                 targets_list = []
                 # total is the number of batches
-                total = len(self.next_batch)//self.batchsize
-                for i in range(total):
+                total = len(self.next_batch) // self.batchsize
+                for _ in range(total):
                     batch = self.next_batch[:self.batchsize]
                     self.next_batch = self.next_batch[self.batchsize:]
 
@@ -519,16 +537,20 @@ class LanguageModelAgent(Agent):
         batch_reply = [{'id': self.getID()} for _ in range(len(observations))]
         if any(['labels' in obs for obs in observations]):
             # if we are starting a new training epoch, reinitialize hidden
-            if self.is_training == False:
+            if not self.is_training:
                 self.hidden = self.model.init_hidden(self.batchsize)
             self.is_training = True
-            data_list, targets_list, _, _, y_lens = self.vectorize(observations, self.opt['seq_len'], self.is_training)
+            data_list, targets_list, _c, _v, y_lens = self.vectorize(
+                observations, self.opt['seq_len'], self.is_training
+            )
         else:
             # if we just finished training, reinitialize hidden
-            if self.is_training == True:
+            if self.is_training:
                 self.hidden = self.model.init_hidden(self.batchsize)
                 self.is_training = False
-            data_list, targets_list, labels, valid_inds, y_lens = self.vectorize(observations, self.opt['seq_len'], self.is_training)
+            data_list, targets_list, labels, valid_inds, y_lens = self.vectorize(
+                observations, self.opt['seq_len'], self.is_training
+            )
 
         if data_list is None:
             # not enough data to batch act yet, return empty responses
@@ -536,12 +558,16 @@ class LanguageModelAgent(Agent):
 
         batch_reply = []
         # during evaluation, len(data_list) is always 1
-        # during training, len(dat_list) >= 0: vectorize returns a list containing all batches available at the time it is called
+        # during training, len(dat_list) >= 0: vectorize returns a list
+        #     containing all batches available at the time it is called
         for i in range(len(data_list)):
             temp_dicts = [{'id': self.getID()} for _ in range(len(observations))]
             # ignore case when we do not return any valid indices
             if data_list[i] is not None:
-                output, hidden, predictions = self.predict(data_list[i], self.hidden, targets_list[i], self.is_training, y_lens)
+                output, hidden, predictions = self.predict(
+                    data_list[i], self.hidden, targets_list[i],
+                    self.is_training, y_lens
+                )
                 self.hidden = self.repackage_hidden(hidden)
 
                 if predictions is not None:

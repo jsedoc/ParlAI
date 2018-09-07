@@ -1,7 +1,9 @@
+# Copyright (c) 2017-present, Facebook, Inc.
 # All rights reserved.
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree. An additional grant
 # of patent rights can be found in the PATENTS file in the same directory.
+
 """Basic example which iterates through the tasks specified and load/extract
 the image features.
 
@@ -49,7 +51,7 @@ def get_dataset_class(opt):
         would just be:
         ``--dataset parlai.tasks.vqa_v1.agents``
     """
-    dataset_name = opt.get('dataset')
+    dataset_name = opt.get('pytorch_teacher_dataset')
     sp = dataset_name.strip().split(':')
     module_name = sp[0]
     if len(sp) > 1:
@@ -77,7 +79,7 @@ def extract_feats(opt):
     logger = ProgressLogger(should_humanize=False, throttle=0.1)
     print("[ Loading Images ]")
     # create repeat label agent and assign it to the specified task
-    if opt.get('dataset') is None:
+    if opt.get('pytorch_teacher_dataset') is None:
         agent = RepeatLabelAgent(opt)
         world = create_task(opt, agent)
 
@@ -97,8 +99,8 @@ def extract_feats(opt):
         try:
             import torch
             from torch.utils.data import DataLoader
-        except ModuleNotFoundError:
-            raise ModuleNotFoundError('Need to install Pytorch: go to pytorch.org')
+        except ImportError:
+            raise ImportError('Need to install Pytorch: go to pytorch.org')
 
         dataset = get_dataset_class(opt)(opt)
         pre_image_path, _ = os.path.split(dataset.image_path)
@@ -110,7 +112,10 @@ def extract_feats(opt):
             opt['num_load_threads'] = 20
             agent = RepeatLabelAgent(opt)
             if opt['task'] == 'pytorch_teacher':
-                opt['task'] = opt['pytorch_buildteacher']
+                if opt.get('pytorch_teacher_task'):
+                    opt['task'] = opt['pytorch_teacher_task']
+                else:
+                    opt['task'] = opt['pytorch_teacher_dataset']
             world = create_task(opt, agent)
             exs_seen = 0
             total_exs = world.num_examples()

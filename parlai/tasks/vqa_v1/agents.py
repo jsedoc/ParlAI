@@ -13,7 +13,7 @@ from parlai.tasks.coco_caption.build_2015 import buildImage as buildImage_2015
 try:
     import torch
 except Exception as e:
-    raise ModuleNotFoundError('Need to install Pytorch: go to pytorch.org')
+    raise ImportError('Need to install Pytorch: go to pytorch.org')
 from torch.utils.data import Dataset
 from parlai.agents.mlb_vqa.mlb_vqa import VqaDictionaryAgent
 
@@ -74,8 +74,8 @@ class VQADataset(Dataset):
             try:
                 import h5py
                 self.h5py = h5py
-            except ModuleNotFoundError:
-                raise ModuleNotFoundError('Need to install h5py - `pip install h5py`')
+            except ImportError:
+                raise ImportError('Need to install h5py - `pip install h5py`')
             self._setup_image_data()
         self.dict_agent = VqaDictionaryAgent(opt)
 
@@ -196,8 +196,6 @@ class OeTeacher(FixedDialogTeacher):
     def reset(self):
         super().reset()
         self.example = None
-        # call this once to get the cache moving
-        self.next_example()
 
     def num_examples(self):
         """Number of examples in VQA-v1."""
@@ -241,7 +239,11 @@ class OeTeacher(FixedDialogTeacher):
         if self.image_mode != 'none' and 'image_id' in self.example:
             image_id = self.example['image_id']
             self.submit_load_request(image_id)
-        return ready
+        # Try to return the previously cached example
+        if ready is None:
+            return self.next_example()
+        else:
+            return ready
 
     def share(self):
         shared = super().share()

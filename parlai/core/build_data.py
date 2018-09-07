@@ -34,6 +34,7 @@ def built(path, version_string=None):
     else:
         return os.path.isfile(os.path.join(path, '.built'))
 
+
 def mark_done(path, version_string=None):
     """Marks the path as done by adding a '.built' file with the current
     timestamp plus a version description string if specified.
@@ -43,12 +44,13 @@ def mark_done(path, version_string=None):
         if version_string:
             write.write('\n' + version_string)
 
+
 def download(url, path, fname, redownload=False):
     """Downloads file using `requests`. If ``redownload`` is set to false, then
     will not download tar file again if it is present (default ``True``)."""
     outfile = os.path.join(path, fname)
     download = not os.path.isfile(outfile) or redownload
-
+    print("[ downloading: " + url + " to " + outfile + " ]")
     retry = 5
     exp_backoff = [2 ** r for r in reversed(range(retry))]
 
@@ -68,7 +70,7 @@ def download(url, path, fname, redownload=False):
         with requests.Session() as session:
             try:
                 header = {'Range': 'bytes=%d-' % resume_pos,
-                        'Accept-Encoding': 'identity'} if resume else {}
+                          'Accept-Encoding': 'identity'} if resume else {}
                 response = session.get(url, stream=True, timeout=5, headers=header)
 
                 # negative reply could be 'none' or just missing
@@ -95,7 +97,8 @@ def download(url, path, fname, redownload=False):
                     break
             except requests.exceptions.ConnectionError:
                 retry -= 1
-                print(''.join([' '] * 60), end='\r')  # TODO Better way to clean progress bar?
+                # TODO Better way to clean progress bar?
+                print(''.join([' '] * 60), end='\r')
                 if retry >= 0:
                     print('Connection error, retrying. (%d retries left)' % retry)
                     time.sleep(exp_backoff[retry])
@@ -131,6 +134,7 @@ def remove_dir(path):
     """Removes the given directory, if it exists."""
     shutil.rmtree(path, ignore_errors=True)
 
+
 def untar(path, fname, deleteTar=True):
     """Unpacks the given archive file to the same directory, then (by default)
     deletes the archive file.
@@ -141,15 +145,17 @@ def untar(path, fname, deleteTar=True):
     if deleteTar:
         os.remove(fullpath)
 
+
 def cat(file1, file2, outfile, deleteFiles=True):
     with open(outfile, 'wb') as wfd:
         for f in [file1, file2]:
-            with open(f,'rb') as fd:
-                shutil.copyfileobj(fd, wfd, 1024*1024*10)
-                #10MB per writing chunk to avoid reading big file into memory.
+            with open(f, 'rb') as fd:
+                shutil.copyfileobj(fd, wfd, 1024 * 1024 * 10)
+                # 10MB per writing chunk to avoid reading big file into memory.
     if deleteFiles:
         os.remove(file1)
         os.remove(file2)
+
 
 def _get_confirm_token(response):
     for key, value in response.cookies.items():
@@ -178,7 +184,9 @@ def download_from_google_drive(gd_id, destination):
                     f.write(chunk)
         response.close()
 
-def download_models(opt, fnames, model_folder, version='v1.0', path='aws', use_model_type=False):
+
+def download_models(opt, fnames, model_folder, version='v1.0', path='aws',
+                    use_model_type=False):
     """Download models into the ParlAI model zoo from a url.
        fnames -- list of filenames to download
        model_folder -- models will be downloaded into models/model_folder/model_type
@@ -191,7 +199,7 @@ def download_models(opt, fnames, model_folder, version='v1.0', path='aws', use_m
         dpath = os.path.join(opt['datapath'], 'models', model_folder, model_type)
     else:
         dpath = os.path.join(opt['datapath'], 'models', model_folder)
-    
+
     if not built(dpath, version):
         for fname in fnames:
             print('[building data: ' + dpath + '/' + fname + ']')
@@ -203,10 +211,11 @@ def download_models(opt, fnames, model_folder, version='v1.0', path='aws', use_m
         # Download the data.
         for fname in fnames:
             if path == 'aws':
+                url = 'http://parl.ai/downloads/_models/'
+                url += model_folder + '/'
                 if use_model_type:
-                    url = 'https://s3.amazonaws.com/fair-data/parlai/_models/' + os.path.join(model_folder, model_type, fname)
-                else:
-                    url = 'https://s3.amazonaws.com/fair-data/parlai/_models/' + os.path.join(model_folder, fname)
+                    url += model_type + '/'
+                url += fname
             else:
                 url = path + '/' + fname
             download(url, dpath, fname)
@@ -215,11 +224,13 @@ def download_models(opt, fnames, model_folder, version='v1.0', path='aws', use_m
         # Mark the data as built.
         mark_done(dpath, version)
 
+
 def modelzoo_path(datapath, path):
     """If path starts with 'models', then we remap it to the model zoo path
     within the data directory (default is ParlAI/data/models).
     We download models from the model zoo if they are not here yet.
-    ."""
+
+    """
     if path is None:
         return None
     if not path.startswith('models:'):
@@ -229,11 +240,12 @@ def modelzoo_path(datapath, path):
         animal = path[7:path.rfind('/')].replace('/', '.')
         if '.' not in animal:
             animal += '.build'
-        module_name = f"parlai.zoo.{animal}"
+        module_name = 'parlai.zoo.{}'.format(animal)
         try:
             my_module = importlib.import_module(module_name)
             download = getattr(my_module, 'download')
             download(datapath)
-        except (ModuleNotFoundError, AttributeError):
+        except (ImportError, AttributeError):
             pass
+
         return os.path.join(datapath, 'models', path[7:])

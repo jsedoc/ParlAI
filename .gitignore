@@ -27,6 +27,7 @@ lib64/
 parts/
 sdist/
 var/
+convai2_submissions/
 parlai_internal/
 parlai_external/
 *.egg-info/
@@ -71,6 +72,7 @@ instance/
 
 # Sphinx documentation
 docs/_build/
+docs/source/task_list.inc
 
 # PyBuilder
 target/

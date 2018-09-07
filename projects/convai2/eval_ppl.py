@@ -43,14 +43,13 @@ from parlai.core.agents import Agent
 from parlai.scripts.eval_ppl import eval_ppl as run_eval_ppl, setup_args as setup_ppl_args
 from projects.convai2.build_dict import build_dict
 
-import math
-
 
 def setup_args(parser=None):
     parser = setup_ppl_args(parser)
     parser.set_defaults(
         task='convai2:self:no_cands',
         datatype='valid',
+        dict_tokenizer='split',
     )
     return parser
 
@@ -90,7 +89,8 @@ class WordFrequencyEntry(Agent):
         # increase likelihood of predicting input words
         tokens = self.dict.tokenize(obs.get('text', ''))
         for t in tokens:
-            freqs[t] += 10000
+            if t in freqs:
+                freqs[t] += 10000
         return freqs
 
 

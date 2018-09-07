@@ -2,13 +2,19 @@
 # LICENSE file in the root directory of this source tree. An additional grant
 # of patent rights can be found in the PATENTS file in the same directory.
 
-from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
 
 from .gru import BayesianGRU
-from .loadstates import *
+from .loadstates import (
+    load_dictionary,
+    load_emb_params,
+    make_emb_state_dict,
+    load_rnn_params,
+    make_bayesian_state_dict,
+    make_gru_state_dict,
+)
 
 
 class Mlb(nn.Module):
@@ -38,15 +44,15 @@ class Mlb(nn.Module):
 
     def process_lengths(self, input):
         max_length = input.size(1)
-        lengths = list(max_length - input.data.eq(0).sum(1).squeeze())
+        sub = input.eq(0).sum(1).squeeze(0) if input.size(0) != 1 else input.eq(0).sum(1)
+        lengths = list(max_length - sub)
         return lengths
 
     def select_last(self, x, lengths):
         batch_size = x.size(0)
-        mask = x.data.new().resize_as_(x.data).fill_(0)
+        mask = x.new().resize_as_(x).fill_(0)
         for i in range(batch_size):
-            mask[i][lengths[i]-1].fill_(1)
-        mask = Variable(mask)
+            mask[i][lengths[i] - 1].fill_(1)
         x = x.mul(mask)
         x = x.sum(1).view(batch_size, self.opt['dim_q'])
         return x
@@ -145,7 +151,7 @@ class MlbNoAtt(Mlb):
                         training=self.training)
         x_q = self.linear_q(x_q)
         x_q = getattr(F, self.opt['activation_q'])(x_q)
-        # hadamard product
+        # hadamard product
         x_mm = torch.mul(x_q, x_v)
         return x_mm
 
@@ -161,7 +167,7 @@ class MlbAtt(Mlb):
                                   self.opt['num_glimpses'],
                                   1, 1)
         if self.opt['original_att']:
-            self.linear_v_fusion = nn.Linear(self.opt['dim_v'] * \
+            self.linear_v_fusion = nn.Linear(self.opt['dim_v'] *
                                              self.opt['num_glimpses'],
                                              self.opt['dim_h'])
             self.linear_q_fusion = nn.Linear(self.opt['dim_q'],
@@ -235,7 +241,7 @@ class MlbAtt(Mlb):
         list_att = []
         for x_att in list_att_split:
             x_att = x_att.contiguous()
-            x_att = x_att.view(batch_size, width*height)
+            x_att = x_att.view(batch_size, width * height)
             x_att = F.softmax(x_att)
             list_att.append(x_att)
 
