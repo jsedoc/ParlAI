@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # Copyright (c) 2017-present, Facebook, Inc.
 # All rights reserved.
 # This source code is licensed under the BSD-style license found in the
@@ -829,7 +831,14 @@ class MTurkManager():
                 'Querying the parlai website for possible notices...',
                 should_print=True)
             endpoint = 'sandbox' if self.is_sandbox else 'live'
-            resp = requests.post(PARLAI_MTURK_NOTICE_URL + endpoint)
+            notice_url = PARLAI_MTURK_NOTICE_URL + endpoint
+            try:
+                import parlai_internal.mturk.configs as local_configs
+                notice_url = local_configs.get_true_url(notice_url)
+            except Exception:
+                # not all users will be drawing configs from internal settings
+                pass
+            resp = requests.post(notice_url)
             warnings = resp.json()
             for warn in warnings:
                 print('Notice: ' + warn)
@@ -889,7 +898,8 @@ class MTurkManager():
         self.server_url = server_utils.setup_server(self.server_task_name,
                                                     self.task_files_to_copy,
                                                     self.opt['local'],
-                                                    heroku_team)
+                                                    heroku_team,
+                                                    self.opt['hobby'])
         shared_utils.print_and_log(logging.INFO, self.server_url)
 
         shared_utils.print_and_log(logging.INFO, "MTurk server setup done.\n",
