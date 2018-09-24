@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # Copyright (c) 2017-present, Facebook, Inc.
 # All rights reserved.
 # This source code is licensed under the BSD-style license found in the
@@ -21,4 +23,4 @@ if __name__ == '__main__':
     random.seed(42)
     parser = setup_args()
     opt = parser.parse_args()
-    interactive(opt)
+    interactive(opt, print_parser=parser)

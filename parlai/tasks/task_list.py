@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # Copyright (c) 2017-present, Facebook, Inc.
 # All rights reserved.
 # This source code is licensed under the BSD-style license found in the
@@ -673,6 +675,15 @@ task_list = [
         "description": (
             "COCO annotations derived from the 2015 COCO Caption Competition. "
             "Link to dataset: http://cocodataset.org/#download"
+        ),
+    },
+    {
+        "id": "integration_tests",
+        "display_name": "Integration Tests",
+        "task": "integration_tests",
+        "tags": ["All", "Debug"],
+        "description": (
+            "Artificial tasks for ensuring models perform as expected"
         ),
     },
 ]

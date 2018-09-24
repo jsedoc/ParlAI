@@ -1,13 +1,28 @@
+#!/usr/bin/env python3
+
 # Copyright (c) 2017-present, Facebook, Inc.
 # All rights reserved.
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree. An additional grant
 # of patent rights can be found in the PATENTS file in the same directory.
+"""General utility code for building PyTorch-based agents in ParlAI.
+
+Contains the following main utilities:
+- TorchAgent class which serves as a useful parent class for other model agents
+- Batch namedtuple which is the input type of the main abstract methods of
+  the TorchAgent class
+- Output namedtuple which is the expected output type of the main abstract
+  methods of the TorchAgent class
+- Beam class which provides some generic beam functionality for classes to use
+
+See below for documentation on each specific tool.
+"""
 
 from parlai.core.agents import Agent
 from parlai.core.build_data import modelzoo_path
 from parlai.core.dict import DictionaryAgent
-from parlai.core.utils import set_namedtuple_defaults, argsort, padded_tensor
+from parlai.core.utils import (set_namedtuple_defaults, argsort, padded_tensor,
+                               NEAR_INF)
 
 try:
     import torch
@@ -139,10 +154,15 @@ class TorchAgent(Agent):
                  'ignored unless you append "-force" to your choice.')
         # optimizer arguments
         agent.add_argument(
-            '-opt', '--optimizer', default='sgd',
-            choices=cls.OPTIM_OPTS,
+            '-opt', '--optimizer', default='sgd', choices=cls.OPTIM_OPTS,
             help='Choose between pytorch optimizers. Any member of torch.optim'
                  ' should be valid.')
+        agent.add_argument(
+            '-lr', '--learningrate', type=float, default=1,
+            help='learning rate')
+        agent.add_argument(
+            '-clip', '--gradient-clip', type=float, default=0.1,
+            help='gradient clipping using l2 norm')
         agent.add_argument(
             '-mom', '--momentum', default=0, type=float,
             help='if applicable, momentum value for optimizer.')
@@ -213,7 +233,7 @@ class TorchAgent(Agent):
 
         # now set up any fields that all instances may need
         self.id = 'TorchAgent'  # child can override
-        self.EMPTY = torch.Tensor([])
+        self.EMPTY = torch.LongTensor([])
         self.NULL_IDX = self.dict[self.dict.null_token]
         self.START_IDX = self.dict[self.dict.start_token]
         self.END_IDX = self.dict[self.dict.end_token]
@@ -276,6 +296,17 @@ class TorchAgent(Agent):
         # TODO: Move scheduler params to command line args
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer, 'min', factor=0.5, patience=3, verbose=True)
+
+    def receive_metrics(self, metrics_dict):
+        """Use the metrics to decide when to adjust LR schedule.
+
+        This uses the loss as the validation metric if present, if not this
+        function does nothing. Note that the model must be reporting loss for
+        this to work.
+        Override this to override the behavior.
+        """
+        if 'loss' in metrics_dict:
+            self.scheduler.step(metrics_dict['loss'])
 
     def _get_embtype(self, emb_type):
         # set up preinitialized embeddings
@@ -375,6 +406,17 @@ class TorchAgent(Agent):
         shared['dict'] = self.dict
         shared['replies'] = self.replies
         return shared
+
+    def _v2t(self, vec):
+        """Convert token indices to string of tokens."""
+        new_vec = []
+        if hasattr(vec, 'cpu'):
+            vec = vec.cpu()
+        for i in vec:
+            if i == self.END_IDX:
+                break
+            new_vec.append(i)
+        return self.dict.vec2txt(new_vec)
 
     def _vectorize_text(self, text, add_start=False, add_end=False,
                         truncate=None, truncate_left=True):
@@ -755,7 +797,7 @@ class TorchAgent(Agent):
         states = torch.load(path, map_location=lambda cpu, _: cpu)
         if 'model' in states:
             self.model.load_state_dict(states['model'])
-        if 'optimizer' in states:
+        if 'optimizer' in states and hasattr(self, 'optimizer'):
             self.optimizer.load_state_dict(states['optimizer'])
         return states
 
@@ -846,7 +888,7 @@ class Beam(object):
         self.bookkeep = []
         # output tokens at each time step
         self.outputs = [torch.Tensor(self.beam_size).long()
-                        .fill_(padding_token).to(self.device)]
+                        .fill_(self.bos).to(self.device)]
         # keeps tuples (score, time_step, hyp_id)
         self.finished = []
         self.HypothesisTail = namedtuple(
@@ -857,13 +899,21 @@ class Beam(object):
         self.min_n_best = min_n_best
 
     def get_output_from_current_step(self):
+        """Get the outputput at the current step."""
         return self.outputs[-1]
 
     def get_backtrack_from_current_step(self):
+        """Get the backtrack at the current step."""
         return self.bookkeep[-1]
 
     def advance(self, softmax_probs):
+        """Advance the beam one step."""
         voc_size = softmax_probs.size(-1)
+        current_length = len(self.all_scores) - 1
+        if current_length < self.min_length:
+            # penalize all eos probs to make it decode longer
+            for hyp_id in range(softmax_probs.size(0)):
+                softmax_probs[hyp_id][self.eos] = -NEAR_INF
         if len(self.bookkeep) == 0:
             # the first step we take only the first hypo into account since all
             # hypos are the same initially
@@ -878,7 +928,7 @@ class Beam(object):
                 # we penalize those word probs to never be chosen
                 if self.outputs[-1][i] == self.eos:
                     # beam_scores[i] is voc_size array for i-th hypo
-                    beam_scores[i] = -1e20
+                    beam_scores[i] = -NEAR_INF
 
         flatten_beam_scores = beam_scores.view(-1)  # [beam_size * voc_size]
         with torch.no_grad():
@@ -912,6 +962,7 @@ class Beam(object):
                 self.eos_top_ts = len(self.outputs) - 1
 
     def done(self):
+        """Return whether beam search is complete."""
         return self.eos_top and self.n_best_counter >= self.min_n_best
 
     def get_top_hyp(self):
@@ -943,7 +994,9 @@ class Beam(object):
 
         return hyp_idx
 
-    def get_pretty_hypothesis(self, list_of_hypotails):
+    @staticmethod
+    def get_pretty_hypothesis(list_of_hypotails):
+        """Return prettier version of the hypotheses."""
         hypothesis = []
         for i in list_of_hypotails:
             hypothesis.append(i.tokenid)
@@ -953,7 +1006,7 @@ class Beam(object):
         return hypothesis
 
     def get_rescored_finished(self, n_best=None):
-        """
+        """Return finished hypotheses in rescored order.
 
         :param n_best: how many n best hypothesis to return
         :return: list with hypothesis
@@ -977,7 +1030,7 @@ class Beam(object):
         return srted
 
     def check_finished(self):
-        """Checks if self.finished is empty and add hyptail in that case.
+        """Check if self.finished is empty and add hyptail in that case.
 
         This will be suboptimal hypothesis since the model did not get any EOS
 
@@ -996,7 +1049,7 @@ class Beam(object):
             self.finished.append(hyptail)
 
     def get_beam_dot(self, dictionary=None, n_best=None):
-        """Creates pydot graph representation of the beam.
+        """Create pydot graph representation of the beam.
 
         :param outputs: self.outputs from the beam
         :param dictionary: tok 2 word dict to save words in the tree nodes

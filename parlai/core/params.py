@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # Copyright (c) 2017-present, Facebook, Inc.
 # All rights reserved.
 # This source code is licensed under the BSD-style license found in the
@@ -212,6 +214,10 @@ class ParlaiParser(argparse.ArgumentParser):
             '--local', dest='local', default=False, action='store_true',
             help='Run the server locally on this server rather than setting up'
                  ' a heroku server.'
+        )
+        mturk.add_argument(
+            '--hobby', dest='hobby', default=False, action='store_true',
+            help='Run the heroku server on the hobby tier.'
         )
         mturk.add_argument(
             '--max-time', dest='max_time', default=0, type=int,
