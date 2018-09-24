@@ -596,7 +596,31 @@ class Seq2seqAgent(Agent):
                 self.metrics['loss'] += loss.item()
                 self.metrics['num_tokens'] += target_tokens
 
+        print ("predictions", predictions)
+        print("cand_preds", cand_preds)
+        
+        # print (dir(self.dict))
+        # print(self.dict.ind2tok)
+        print ("predictions",' '.join([self.dict.ind2tok[int(x)] for l in predictions for x in l]))
+        print ("cand_preds",' '.join([self.dict.ind2tok[int(x)] for l in cand_preds for x in l]))
+        
+        print("pred length",len([self.dict.ind2tok[int(x)] for l in predictions for x in l]))
+        print("cand_preds length",len([self.dict.ind2tok[int(x)] for l in cand_preds for x in l]))
+        print ("predictions size", predictions.size())
+        print("cand_preds size", cand_preds.size())
+        print ("scores_size",scores.size())
+        print()
+        # print ()
+
+
+
+        # self.ind2tok = shared.get('ind2tok', {})
+        # print(list(self.ind2tok.items())[10])
+
+##################################
+
         return predictions, cand_preds
+
 
     def vectorize(self, observations):
         """Convert a list of observations into input & target tensors."""
