@@ -598,28 +598,43 @@ class Seq2seqAgent(Agent):
                 self.metrics['loss'] += loss.item()
                 self.metrics['num_tokens'] += target_tokens
 
-        print ("predictions", predictions)
-        print("cand_preds", cand_preds)
-        
+        # print ("predictions", predictions)
+        # print("cand_preds", cand_preds)
+        # print("--------------------------------------------------")
+
         # print (dir(self.dict))
         # print(self.dict.ind2tok)
-        print ("predictions",' '.join([self.dict.ind2tok[int(x)] for l in predictions for x in l]))
-        print ("cand_preds",' '.join([self.dict.ind2tok[int(x)] for l in cand_preds for x in l]))
+
+        # print ("predictions",' '.join([self.dict.ind2tok[int(x)] for l in predictions for x in l]))
+        # print()
+        # print ("cand_preds",' '.join([self.dict.ind2tok[int(x)] for l in cand_preds for x in l]))
+        # print()
+
+        ##################################################
+        # print("predddd", [[' '.join([self.dict.ind2tok[int(x)] for x in l])] for l in predictions])
+        # print("pred length",[len([self.dict.ind2tok[int(x)] for x in l]) for l in predictions])
+        # print()
+
+        # print("candddd", [[' '.join([self.dict.ind2tok[int(x)] for x in l])] for l in cand_preds])
+        # print("cand_preds length",[len([self.dict.ind2tok[int(x)] for x in l]) for l in cand_preds])
+        # print()
         
-        print("pred length",len([self.dict.ind2tok[int(x)] for l in predictions for x in l]))
-        print("cand_preds length",len([self.dict.ind2tok[int(x)] for l in cand_preds for x in l]))
-        print ("predictions size", predictions.size())
-        print("cand_preds size", cand_preds.size())
-        print ("scores_size",scores.size())
-        print()
-        # print ()
+        # print ("predictions size", predictions.size())
+        # print("cand_preds size", cand_preds.size())
+        # print ("scores_size",scores.size())
 
+        # candidate_list = [[' '.join([self.dict.ind2tok[int(x)] for x in l]), [self.dict.freq[self.dict.ind2tok[int(x)]] for x in l]] for l in cand_preds]
+        ## After this step, each list in candidate_list has two elements: text and frequency
+        ## Alternatively, if the text doesn't have to be a string but a list of words:
+        # candidate_list = [[[self.dict.ind2tok[int(x)] for x in l], [self.dict.freq[self.dict.ind2tok[int(x)]] for x in l]] for l in cand_preds]
+        # for i in range(len(candidate_list)):
+        #     candidate_list[i].append(self.curr_cands[i])
+        ##################################################
 
-
-        # self.ind2tok = shared.get('ind2tok', {})
-        # print(list(self.ind2tok.items())[10])
-
-##################################
+        ##################################################################################################
+        candidate_list = [[self.cand_permutation[i], self.curr_cands[i]['text'], [self.dict.freq[x] for x in self.curr_cands[i]['text'].split()]] for i in range(len(self.curr_cands))]
+        print(candidate_list)
+        ###################################################################################################
 
         return predictions, cand_preds
 
@@ -659,6 +674,12 @@ class Seq2seqAgent(Agent):
                     if self.use_cuda:
                         cs = cs.cuda()
                     cands.append(cs)
+        ####################################################################################################
+        # print("curr_cands",len(curr_cands), curr_cands[0])
+        self.cand_permutation = valid_c_inds
+        self.curr_cands = curr_cands
+        # print ("valid_c_inds",len(valid_c_inds),valid_c_inds)
+        ####################################################################################################
 
         return xs, ys, labels, valid_inds, cands, valid_cands, is_training
 
