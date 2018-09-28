@@ -633,6 +633,8 @@ class Seq2seqAgent(Agent):
 
         ##################################################################################################
         candidate_list = [[self.cand_permutation[i], self.curr_cands[i]['text'], [self.dict.freq[x] for x in self.curr_cands[i]['text'].split()]] for i in range(len(self.curr_cands))]
+        for i in range(len(candidate_list)):
+            candidate_list[i].append([self.model.ranker.scores_per_word[j][self.cand_permutation[i]].item() for j in range(len(self.model.ranker.scores_per_word))])
         print(candidate_list)
         ###################################################################################################
 
