@@ -447,6 +447,7 @@ class Ranker(object):
             n_cs = curr_cs.size(0)
             starts = start.expand(n_cs).unsqueeze(1)
             scores = 0
+            scores_per_word = []
             seqlens = 0
             # select just the one hidden state
             if isinstance(hidden, torch.Tensor):
@@ -469,6 +470,7 @@ class Ranker(object):
                 xs = torch.cat([starts, c_in], 1)
             else:
                 xs, c_in = starts, curr_cs
+
             if self.attn_type == 'none':
                 preds, score, cur_hid = self.decoder(xs, cur_hid, cur_enc, cur_mask)
                 true_score = F.log_softmax(score, dim=2).gather(
@@ -484,11 +486,13 @@ class Ranker(object):
                     true_score = F.log_softmax(score, dim=2).gather(
                         2, ci.unsqueeze(1).unsqueeze(2))
                     nonzero = ci.ne(0).float()
+                    scores_per_word.append(true_score.squeeze(2).squeeze(1) * nonzero)
                     scores += true_score.squeeze(2).squeeze(1) * nonzero
                     seqlens += nonzero
 
             scores /= seqlens  # **len_penalty?
             cand_scores.append(scores)
+            self.scores_per_word = scores_per_word
 
         max_len = max(len(c) for c in cand_scores)
         cand_scores = torch.cat([pad(c, max_len).unsqueeze(0) for c in cand_scores], 0)
