@@ -584,7 +584,7 @@ class Seq2seqAgent(Agent):
             self.update_params()
         else:
             self.model.eval()
-            out = self.model(xs, ys=None, cands=cands, valid_cands=valid_cands, beam_size=self.beam_size, topk=self.topk)
+            out = self.model(xs, ys=None, cands=cands, valid_cands=valid_cands, beam_size=self.beam_size, topk=self.topk, source_index=self.cand_permutation[-1])
             predictions, cand_preds = out[0], out[2]
 
             if ys is not None:
@@ -631,13 +631,24 @@ class Seq2seqAgent(Agent):
         #     candidate_list[i].append(self.curr_cands[i])
         ##################################################
 
+##################################################################################################
         ##################################################################################################
-        candidate_list = [[self.cand_permutation[i], self.curr_cands[i]['text'], [self.dict.freq[x] for x in self.curr_cands[i]['text'].split()]] for i in range(len(self.curr_cands))]
-        for i in range(len(candidate_list)):
-            candidate_list[i].append([self.model.ranker.scores_per_word[j][self.cand_permutation[i]].item() for j in range(len(self.model.ranker.scores_per_word))])
-        print(candidate_list)
+        # candidate_list = [[self.cand_permutation[i], self.curr_cands[self.cand_permutation[i]]['text'], [self.dict.freq[x] for x in self.curr_cands[self.cand_permutation[i]]['text'].split()]] for i in range(len(self.curr_cands))]
+        # for i in range(len(candidate_list)):
+        #     candidate_list[i].append([self.model.ranker.scores_per_word[j][self.cand_permutation[i]].item() for j in range(len(self.model.ranker.scores_per_word))])
+        ##################################################################################################
+        ##################################################################################################
+
+
+        # print(candidate_list)
+        # text_file = open("freq_likelihood_comparison.txt", "w")
+        # text_file.write(candidate_list)
+        # text_file.close()
         ###################################################################################################
 
+        ###################################################################################
+        # print ("lt",self.model.encoder.lt(torch.tensor([2,3,5], dtype=torch.long)))
+        ###################################################################################
         return predictions, cand_preds
 
 
@@ -668,22 +679,31 @@ class Seq2seqAgent(Agent):
             valid_cands = []
             for i, v in enumerate(valid_inds):
                 if 'label_candidates' in observations[v]:
-                    curr_lcs = list(observations[v]['label_candidates'])
+                    curr_lcs = list(observations[v]['label_candidates']) + [observations[v]['text']]
                     curr_cands = [{'text': c} for c in curr_lcs]
+
                     cs, _, _, valid_c_inds, *_ = PaddingUtils.pad_text(curr_cands, self.dict, null_idx=self.NULL_IDX, dq=True, truncate=self.truncate)
+                    # print("valid_c_inds",len(valid_c_inds))
+                    # print("curr_lcs", curr_lcs, len(curr_lcs))
+
                     valid_cands.append((i, v, [curr_lcs[j] for j in valid_c_inds]))
                     cs = torch.LongTensor(cs)
                     if self.use_cuda:
                         cs = cs.cuda()
                     cands.append(cs)
+
         ####################################################################################################
         # print("curr_cands",len(curr_cands), curr_cands[0])
+        # print("observations", observations[0].keys(), observations)
+        # cands.append(xs)
+        # print("valid_cands",valid_cands, len(valid_cands))
         self.cand_permutation = valid_c_inds
         self.curr_cands = curr_cands
         # print ("valid_c_inds",len(valid_c_inds),valid_c_inds)
+        # print("valid_c_inds",len(valid_c_inds))
         ####################################################################################################
 
-        return xs, ys, labels, valid_inds, cands, valid_cands, is_training
+        return xs, ys, labels, valid_inds, cands, valid_cands, is_training, valid_c_inds
 
     def init_cuda_buffer(self, batchsize):
         if self.use_cuda and not hasattr(self, 'buffer_initialized'):
@@ -714,7 +734,7 @@ class Seq2seqAgent(Agent):
         # valid_inds tells us the indices of all valid examples
         # e.g. for input [{}, {'text': 'hello'}, {}, {}], valid_inds is [1]
         # since the other three elements had no 'text' field
-        xs, ys, labels, valid_inds, cands, valid_cands, is_training = self.vectorize(observations)
+        xs, ys, labels, valid_inds, cands, valid_cands, is_training, valid_c_inds = self.vectorize(observations)
 
         if xs is None:
             # no valid examples, just return empty responses
@@ -723,6 +743,13 @@ class Seq2seqAgent(Agent):
         # produce predictions, train on targets if availables
         cand_inds = [i[0] for i in valid_cands] if valid_cands is not None else None
         predictions, cand_preds = self.predict(xs, ys, cands, cand_inds, is_training)
+
+        # print("valid_cands", valid_cands)
+        # print("cand_inds", cand_inds)
+        # print("valid_inds", valid_inds)
+
+
+        # print("valid_c_inds",valid_c_inds)
 
         if is_training:
             report_freq = 0
