@@ -14,7 +14,10 @@ from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 import torch.nn.functional as F
 from .utils_v0 import Beam
 from .dict_v0 import DictionaryAgent
+# from .seq2seq_v0 import Agent
 import os
+
+
 
 
 def pad(tensor, length, dim=0):
@@ -104,7 +107,7 @@ class Seq2seq(nn.Module):
         return enc_out.view(batch_size * beam_size, -1, hidden_size)
 
     def forward(self, xs, ys=None, cands=None, valid_cands=None, prev_enc=None,
-                rank_during_training=False, beam_size=1, topk=1):
+                rank_during_training=False, beam_size=1, topk=1, source_index=-1):
         """Get output predictions from the model.
 
         Arguments:
@@ -118,6 +121,9 @@ class Seq2seq(nn.Module):
         rank_during_training -- (default False) if set, ranks any available
             cands during training as well
         """
+        # print("valid_cands",valid_cands)
+
+
         input_xs = xs
         nbest_beam_preds, nbest_beam_scores = None, None
         bsz = len(xs)
@@ -142,9 +148,9 @@ class Seq2seq(nn.Module):
             decode_params = (start, hidden, enc_out, attn_mask)
             if self.training:
                 if rank_during_training:
-                    cand_preds, cand_scores = self.ranker.forward(cands, valid_cands, decode_params=decode_params)
+                    cand_preds, cand_scores = self.ranker.forward(cands, valid_cands, decode_params=decode_params,source_index=source_index)
             else:
-                cand_preds, cand_scores = self.ranker.forward(cands, valid_cands, decode_params=decode_params)
+                cand_preds, cand_scores = self.ranker.forward(cands, valid_cands, decode_params=decode_params, source_index=source_index)
 
         if ys is not None:
             y_in = ys.narrow(1, 0, ys.size(1) - 1)
@@ -423,8 +429,11 @@ class Ranker(object):
         self.decoder = decoder
         self.NULL_IDX = padding_idx
         self.attn_type = attn_type
+         # ###################################################################################
+        # self.ddd = seq2seq_v0.Seq2seqAgent(seq2seq_v0.Agent())
+         # ###################################################################################
 
-    def forward(self, cands, cand_inds, decode_params):
+    def forward(self, cands, cand_inds, decode_params, source_index=-1):
         start, hidden, enc_out, attn_mask = decode_params
 
         hid, cell = (hidden, None) if isinstance(hidden, torch.Tensor) else hidden
@@ -439,14 +448,23 @@ class Ranker(object):
             enc_out = enc_out.index_select(0, cand_indices)
             attn_mask = attn_mask.index_select(0, cand_indices)
 
+            print("cand_indices", cand_indices, len(cand_indices))
+
         cand_scores = []
 
         for i in range(len(cands)):
+
+            # scores = similarity
+
+
+
             curr_cs = cands[i]
+            # print("curr_cs", curr_cs)
 
             n_cs = curr_cs.size(0)
             starts = start.expand(n_cs).unsqueeze(1)
             scores = 0
+            scores_per_word = []
             seqlens = 0
             # select just the one hidden state
             if isinstance(hidden, torch.Tensor):
@@ -469,6 +487,7 @@ class Ranker(object):
                 xs = torch.cat([starts, c_in], 1)
             else:
                 xs, c_in = starts, curr_cs
+
             if self.attn_type == 'none':
                 preds, score, cur_hid = self.decoder(xs, cur_hid, cur_enc, cur_mask)
                 true_score = F.log_softmax(score, dim=2).gather(
@@ -484,16 +503,72 @@ class Ranker(object):
                     true_score = F.log_softmax(score, dim=2).gather(
                         2, ci.unsqueeze(1).unsqueeze(2))
                     nonzero = ci.ne(0).float()
+                    scores_per_word.append(true_score.squeeze(2).squeeze(1) * nonzero)
                     scores += true_score.squeeze(2).squeeze(1) * nonzero
+                    #############################################
                     seqlens += nonzero
 
             scores /= seqlens  # **len_penalty?
             cand_scores.append(scores)
+            self.scores_per_word = scores_per_word
 
+        # ###################################################################################
+        # print("cand_inds",cand_inds, len(cand_inds))
+
+        # print ("lt",self.decoder.lt(torch.tensor([2,3,5], dtype=torch.long)).size())
+        # aaa = self.decoder.lt(torch.tensor([self.dict[x] for x in curr_cs.split()], dtype=torch.long))
+        # import math
+        # def cosine_similarity(v1,v2):
+        #     "compute cosine similarity of v1 to v2: (v1 dot v2)/{||v1||*||v2||)"
+        #     sumxx, sumxy, sumyy = 0, 0, 0
+        #     for i in range(len(v1)):
+        #         x = v1[i]; y = v2[i]
+        #         sumxx += x*x
+        #         sumyy += y*y
+        #         sumxy += x*y
+        #     return sumxy/math.sqrt(sumxx*sumyy)
+
+        aaa = self.decoder.lt(curr_cs)
+        # print("!!!",seqlens, aaa.size(1))
+        sumaaa = torch.sum(aaa, dim=1)
+        seqlens = seqlens.view(-1,1)
+        # print(seqlens.size())
+
+
+        # print ("seqlens.expand_as(sumaaa)", seqlens.expand(20, 256))
+        sumaaa /= seqlens.expand_as(sumaaa)
+
+        # print("aaa", aaa, aaa.size())
+        # print ("sum by dim2", sumaaa, sumaaa.size())
+
+        # print("sumaaa[0]", sumaaa[0])
+
+        cos = nn.CosineSimilarity(dim=1, eps=1e-6)
+        # output = cos(input1, input2)
+        coslist = [cos(sumaaa[source_index].view(1,-1), sumaaa[i].view(1,-1)).item() for i in range(21)]
+
+        coslist2 = sorted([(i,c) for i, c in enumerate(coslist)], key=lambda x: -x[1])
+        # print ("cosine_similarity", len(coslist), coslist)
+
+        coslist3 = coslist2[1:] + [coslist2[0]]
+        # print("coslist2", coslist2)
+        # print()
+        # print("coslist3", coslist3)
+
+        preds2 = torch.tensor([[i for i,c in coslist3]])
+        print("preds2", preds2)
+        print()
+
+        # sorted_coslist = coslist.sort(1, True)[1][1:] + [coslist.sort(1, True)[1][0]]
+        # print("sorted_coslist", sorted_coslist)
+        # print("seqlens.size()", seqlens.size())
+        # ###################################################################################
         max_len = max(len(c) for c in cand_scores)
         cand_scores = torch.cat([pad(c, max_len).unsqueeze(0) for c in cand_scores], 0)
         preds = cand_scores.sort(1, True)[1]
-        return preds, cand_scores
+
+        print ("preds", preds)
+        return preds2, cand_scores
 
 
 class Linear(nn.Module):
