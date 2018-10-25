@@ -178,8 +178,12 @@ class CaedAgent(TorchAgent):
         """Call vectorize without adding start tokens to labels."""
         kwargs['add_start'] = False
 
+        # (Pdb) p args[0]['text'] 
+        # 'your persona: i like to remodel homes.\nyour persona: i like to go hunting.\nyour persona: i like to shoot a bow.\nyour persona: my favorite holiday is halloween.\nhi , how are you doing ? i am getting ready to do some cheetah chasing to stay in shape .'
+        # (Pdb) p args[0]['labels']
+        # ('you must be very fast . hunting is one of my favorite hobbies .',)
         args[0]['text'] = process_line(args[0]['text'])
-
+        
         return super().vectorize(*args, **kwargs)
 
     def train_step(self, batch):

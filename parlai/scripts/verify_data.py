@@ -8,8 +8,12 @@
 """Verify data doesn't have basic mistakes, like empty text fields
 or empty label candidates.
 
-For example:
-`python parlai/scripts/verify_data.py -t convai2 -dt train:ordered`
+Examples
+--------
+
+.. code-block:: shell
+
+  python parlai/scripts/verify_data.py -t convai2 -dt train:ordered
 """
 from parlai.core.params import ParlaiParser
 from parlai.agents.repeat_label.repeat_label import RepeatLabelAgent
@@ -19,7 +23,7 @@ from parlai.core.utils import TimeLogger
 
 def setup_args(parser=None):
     if parser is None:
-        parser = ParlaiParser(True, True)
+        parser = ParlaiParser(True, True, 'Lint for ParlAI tasks')
     # Get command line arguments
     parser.add_argument('-ltim', '--log-every-n-secs', type=float, default=2)
     parser.add_argument('-d', '--display-examples', type='bool', default=False)

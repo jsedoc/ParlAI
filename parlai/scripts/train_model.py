@@ -5,26 +5,25 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree. An additional grant
 # of patent rights can be found in the PATENTS file in the same directory.
-"""Train a model.
+"""The standard way to train a model. After training, also computes validation
+and test error.
 
-After training, computes validation and test error.
+The user must provide a model (with ``--model``) and a task (with ``--task`` or
+``--pytorch-teacher-task``).
 
-Run with, e.g.:
+Examples
+--------
 
-python examples/train_model.py -m ir_baseline -t dialog_babi:Task:1 -mf /tmp/model
+.. code-block:: shell
 
-..or..
+  python -m parlai.scripts.train -m ir_baseline -t dialog_babi:Task:1 -mf /tmp/model
+  python -m parlai.scripts.train -m seq2seq -t babi:Task10k:1 -mf '/tmp/model' -bs 32 -lr 0.5 -hs 128
+  python -m parlai.scripts.train -m drqa -t babi:Task10k:1 -mf /tmp/model -bs 10
 
-python examples/train_model.py -m seq2seq -t babi:Task10k:1 -mf '/tmp/model' -bs 32
--lr 0.5 -hs 128
+"""  # noqa: E501
 
-..or..
-
-python examples/train_model.py -m drqa -t babi:Task10k:1 -mf /tmp/model -bs 10
-
-TODO List:
-- More logging (e.g. to files), make things prettier.
-"""
+# TODO List:
+# * More logging (e.g. to files), make things prettier.
 
 from parlai.core.agents import create_agent, create_agent_from_shared
 from parlai.core.worlds import create_task
@@ -38,12 +37,13 @@ import os
 
 def setup_args(parser=None):
     if parser is None:
-        parser = ParlaiParser(True, True)
+        parser = ParlaiParser(True, True, 'Train a model')
     train = parser.add_argument_group('Training Loop Arguments')
     train.add_argument('-et', '--evaltask',
                        help=('task to use for valid/test (defaults to the '
                              'one used for training if not set)'))
     train.add_argument('--eval-batchsize', type=int,
+                       hidden=True,
                        help='Eval time batch size (defaults to same as -bs)')
     train.add_argument('--display-examples', type='bool', default=False)
     train.add_argument('-eps', '--num-epochs', type=float, default=-1)
@@ -71,6 +71,7 @@ def setup_args(parser=None):
                             'the model_file path if set.')
     train.add_argument('-vme', '--validation-max-exs',
                        type=int, default=-1,
+                       hidden=True,
                        help='max examples to use during validation (default '
                             '-1 uses all)')
     train.add_argument('-vp', '--validation-patience',
@@ -85,15 +86,19 @@ def setup_args(parser=None):
                        help='how to optimize validation metric (max or min)')
     train.add_argument('-vcut', '--validation-cutoff',
                        type=float, default=1.0,
+                       hidden=True,
                        help='value at which training will stop if exceeded by '
                             'training metric')
     train.add_argument('-dbf', '--dict-build-first',
+                       hidden=True,
                        type='bool', default=True,
                        help='build dictionary first before training agent')
     train.add_argument('-lfc', '--load-from-checkpoint',
                        type='bool', default=False,
+                       hidden=True,
                        help='load model from checkpoint if available')
     train.add_argument('-vshare', '--validation-share-agent', default=False,
+                       hidden=True,
                        help='use a shared copy of the agent for validation. '
                             'this will eventually default to True, but '
                             'currently defaults to False.')
@@ -135,7 +140,7 @@ def run_eval(agent, opt, datatype, max_exs=-1, write_log=False, valid_world=None
         if cnt == 0 and opt['display_examples']:
             print(valid_world.display() + '\n~~')
             print(valid_world.report())
-        cnt += opt['batchsize']
+        cnt += valid_world.opt['batchsize']
         if max_exs > 0 and cnt > max_exs + opt.get('numthreads', 1):
             # note this max_exs is approximate--some batches won't always be
             # full depending on the structure of the data
