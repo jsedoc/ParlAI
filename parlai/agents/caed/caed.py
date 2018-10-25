@@ -16,6 +16,11 @@ import torch
 from torch import optim
 import torch.nn as nn
 import torch.nn.functional as F
+import spacy, tqdm
+nlp = spacy.load('en') # install 'en' model (python3 -m spacy download en)
+import collections
+from collections import defaultdict
+import concurrent.futures
 
 
 class CaedAgent(TorchAgent):
@@ -115,6 +120,39 @@ class CaedAgent(TorchAgent):
         shared['decoder'] = self.decoder
         return shared
 
+    # only works if text is of the form "Can I see your AMA ?" with a space before punctuation
+    # do we want A: in the final result? right now it is
+    def process_line(text):
+        l = text.split(":", 1)
+        if len(l) < 2:
+            return text
+
+        word_to_ent = dict()
+        ent_counts = dict()
+
+        l = l[1].strip()
+
+        spdoc = nlp(l)
+        for e in spdoc.ents:
+            word_to_ent[e.as_doc().text.strip()] = e.label_
+
+        for word in word_to_ent:
+            ent = word_to_ent[word]
+            previous_count = 0;
+            if ent in ent_counts:
+                previous_count = ent_counts[ent]
+            ent_counts[ent] = previous_count + 1
+            word_to_ent[word] = word_to_ent[word] + '@' + str(ent_counts[ent])
+
+        processed_text = ''
+        for word in text.split():
+            if word in word_to_ent:
+                processed_text = processed_text + word_to_ent[word] + ' '
+            else:
+                processed_text = processed_text + word + ' '
+        processed_text.strip()
+        return processed_text
+
     def v2t(self, vector):
         """Convert vector to text.
 
@@ -139,7 +177,11 @@ class CaedAgent(TorchAgent):
     def vectorize(self, *args, **kwargs):
         """Call vectorize without adding start tokens to labels."""
         kwargs['add_start'] = False
-        args[0]['text'] = spacey.some_method(args[0]['text'])
+
+        l = args[0]['text']
+        l = process_line(l)
+
+        #args[0]['text'] = spacey.some_method(args[0]['text'])
         return super().vectorize(*args, **kwargs)
 
     def train_step(self, batch):
