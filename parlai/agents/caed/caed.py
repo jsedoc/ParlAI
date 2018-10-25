@@ -178,10 +178,8 @@ class CaedAgent(TorchAgent):
         """Call vectorize without adding start tokens to labels."""
         kwargs['add_start'] = False
 
-        l = args[0]['text']
-        l = process_line(l)
+        args[0]['text'] = process_line(args[0]['text'])
 
-        #args[0]['text'] = spacey.some_method(args[0]['text'])
         return super().vectorize(*args, **kwargs)
 
     def train_step(self, batch):
