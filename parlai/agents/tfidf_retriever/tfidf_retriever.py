@@ -13,7 +13,7 @@ try:
     import unicodedata  # noqa: F401
     import pexpect  # noqa: F401
 except ImportError:
-    raise ImportError('Please `pip install regex scipy sklearn pexpect`'
+    raise ImportError('Please `pip install regex scipy scikit-learn pexpect`'
                       ' to use the tfidf_retriever agent.')
 
 from parlai.core.agents import Agent
@@ -27,7 +27,7 @@ from collections import deque
 import math
 import random
 import os
-import pickle
+import json
 import sqlite3
 
 
@@ -165,16 +165,16 @@ class TfidfRetrieverAgent(Agent):
 
     def save(self, path=None):
         self.rebuild()
-        with open(self.opt['model_file'] + ".opt", 'wb') as handle:
-            pickle.dump(self.opt, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        with open(self.opt['model_file'] + '.opt', 'w') as handle:
+            json.dump(self.opt, handle)
         with open(self.opt['model_file'], 'w') as f:
             f.write('\n')
 
     def train_act(self):
-        if ('ordered' not in self.opt.get('datatype', 'train:ordered')
-                or self.opt.get('batchsize', 1) != 1
-                or self.opt.get('numthreads', 1) != 1
-                or self.opt.get('num_epochs', 1) != 1):
+        if ('ordered' not in self.opt.get('datatype', 'train:ordered') or
+                self.opt.get('batchsize', 1) != 1 or
+                self.opt.get('numthreads', 1) != 1 or
+                self.opt.get('num_epochs', 1) != 1):
             raise RuntimeError('Need to set --batchsize 1, --numthreads 1, \
             --datatype train:ordered, --num_epochs 1')
         obs = self.observation
@@ -215,8 +215,10 @@ class TfidfRetrieverAgent(Agent):
             return self.train_act()
         if 'text' in obs:
             self.rebuild()  # no-op if nothing has been queued to store
-            doc_ids, doc_scores = self.ranker.closest_docs(obs['text'],
-                                                           self.opt.get('retriever_num_retrieved', 5))
+            doc_ids, doc_scores = self.ranker.closest_docs(
+                obs['text'],
+                self.opt.get('retriever_num_retrieved', 5)
+            )
 
             if False and obs.get('label_candidates'):  # TODO: Alex (doesn't work)
                 # these are better selection than stored facts
@@ -233,10 +235,14 @@ class TfidfRetrieverAgent(Agent):
                         ),
                         c_list
                     )
-                c_ids, c_scores = self.ranker.closest_docs(obs['text'],
-                                                           self.opt.get('retriever_num_retrieved', 5),
-                                                           matrix=self.cands_hash[cands_id][0])
-                reply['text_candidates'] = [self.cands_hash[cands_id][1][cid] for cid in c_ids]
+                c_ids, c_scores = self.ranker.closest_docs(
+                    obs['text'],
+                    self.opt.get('retriever_num_retrieved', 5),
+                    matrix=self.cands_hash[cands_id][0]
+                )
+                reply['text_candidates'] = [
+                    self.cands_hash[cands_id][1][cid] for cid in c_ids
+                ]
                 reply['candidate_scores'] = c_scores
                 if len(reply['text_candidates']) > 0:
                     reply['text'] = reply['text_candidates'][0]

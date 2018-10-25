@@ -19,7 +19,7 @@ from collections import defaultdict
 
 import os
 import math
-import pickle
+import json
 import tempfile
 
 
@@ -29,8 +29,9 @@ class Seq2seqAgent(TorchAgent):
     This model supports encoding the input and decoding the output via one of
     several flavors of RNN. It then uses a linear layer (whose weights can
     be shared with the embedding layer) to convert RNN output states into
-    output tokens. This model currently uses greedy decoding, selecting the
-    highest probability token at each time step.
+    output tokens. This model supports greedy decoding, selecting the
+    highest probability token at each time step, as well as beam
+    search.
 
     For more information, see the following papers:
     - Neural Machine Translation by Jointly Learning to Align and Translate
@@ -107,6 +108,8 @@ class Seq2seqAgent(TorchAgent):
         agent.add_argument('-idr', '--input-dropout', type=float, default=0.0,
                            help='Each token from the input will be masked with'
                                 ' __unk__ token with this probability.')
+        agent.add_argument('--beam-block-ngram', type=int, default=0,
+                           help='Block all repeating ngrams up to history length n-1')
         TorchAgent.add_cmdline_args(argparser)
         Seq2seqAgent.dictionary_class().add_cmdline_args(argparser)
         return agent
@@ -149,6 +152,7 @@ class Seq2seqAgent(TorchAgent):
         self.beam_size = opt.get('beam_size', 1)
         self.beam_min_n_best = opt.get('beam_min_n_best', 3)
         self.beam_min_length = opt.get('beam_min_length', 3)
+        self.beam_block_ngram = opt.get('beam_block_ngram', 0)
 
         if shared:
             # set up shared properties
@@ -188,7 +192,7 @@ class Seq2seqAgent(TorchAgent):
             self.criterion.cuda()
 
         if 'train' in opt.get('datatype', ''):
-            self._init_optim(
+            self.init_optim(
                 [p for p in self.model.parameters() if p.requires_grad],
                 optim_states=states.get('optimizer'),
                 saved_optim_type=states.get('optimizer_type'))
@@ -398,7 +402,7 @@ class Seq2seqAgent(TorchAgent):
 
     @staticmethod
     def beam_search(model, batch, beam_size, start=1, end=2,
-                    pad=0, min_length=3, min_n_best=5, max_ts=40):
+                    pad=0, min_length=3, min_n_best=5, max_ts=40, block_ngram=0):
         """ Beam search given the model and Batch
         This function uses model with the following reqs:
         - model.encoder takes input returns tuple (enc_out, enc_hidden, attn_mask)
@@ -432,7 +436,8 @@ class Seq2seqAgent(TorchAgent):
         batch_size = len(batch.text_lengths)
         beams = [Beam(beam_size, min_length=min_length, padding_token=pad,
                       bos_token=start, eos_token=end, min_n_best=min_n_best,
-                      cuda=current_device) for i in range(batch_size)]
+                      cuda=current_device,
+                      block_ngram=block_ngram) for i in range(batch_size)]
         decoder_input = torch.Tensor([start]).detach().expand(
             batch_size, 1).long().to(current_device)
         # repeat encoder_outputs, hiddens, attn_mask
@@ -523,7 +528,8 @@ class Seq2seqAgent(TorchAgent):
                 end=self.END_IDX,
                 pad=self.NULL_IDX,
                 min_length=self.beam_min_length,
-                min_n_best=self.beam_min_n_best)
+                min_n_best=self.beam_min_n_best,
+                block_ngram=self.beam_block_ngram)
             beam_preds_scores, _, beams = out
             preds, scores = [p[0] for p in beam_preds_scores], [
                 p[1] for p in beam_preds_scores]
@@ -576,10 +582,10 @@ class Seq2seqAgent(TorchAgent):
                 torch.save(model, write)
 
             # save opt file
-            with open(path + ".opt", 'wb') as handle:
+            with open(path + '.opt', 'w') as handle:
                 # save version string
                 self.opt['model_version'] = self.model_version()
-                pickle.dump(self.opt, handle, protocol=pickle.HIGHEST_PROTOCOL)
+                json.dump(self.opt, handle)
 
     def load(self, path):
         """Return opt and model states."""

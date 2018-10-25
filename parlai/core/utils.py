@@ -777,7 +777,7 @@ def _ellipse(lst, max_display=5, sep='|'):
     if max_display > 0 and len(choices) > max_display:
         ellipsis = '...and {} more'.format(len(choices) - max_display)
         choices = choices[:max_display] + [ellipsis]
-    return sep.join(choices)
+    return sep.join(str(c) for c in choices)
 
 
 def display_messages(msgs, prettify=False, ignore_fields='', max_len=1000):
@@ -806,7 +806,10 @@ def display_messages(msgs, prettify=False, ignore_fields='', max_len=1000):
             lines.append(space + '[reward: {r}]'.format(r=msg['reward']))
         for key in msg:
             if key not in DISPLAY_MESSAGE_DEFAULT_FIELDS and key not in ignore_fields:
-                line = '[' + key + ']: ' + clip_text(str(msg.get(key)), max_len)
+                if type(msg[key]) is list:
+                    line = '[' + key + ']:\n  ' + _ellipse(msg[key], sep='\n  ')
+                else:
+                    line = '[' + key + ']: ' + clip_text(str(msg.get(key)), max_len)
                 lines.append(space + line)
         if type(msg.get('image')) == str:
             lines.append(msg['image'])
@@ -963,6 +966,9 @@ def padded_tensor(items, pad_idx=0, use_cuda=False, left_padded=False):
     # max in time dimension
     t = max(lens)
 
+    # if input tensors are empty, we should expand to nulls
+    t = max(t, 1)
+
     if isinstance(items[0], torch.Tensor):
         # keep type of input tensors, they may already be cuda ones
         output = items[0].new(n, t)
@@ -970,15 +976,19 @@ def padded_tensor(items, pad_idx=0, use_cuda=False, left_padded=False):
         output = torch.LongTensor(n, t)
     output.fill_(pad_idx)
 
-    for i, item in enumerate(items):
+    for i, (item, length) in enumerate(zip(items, lens)):
+        if length == 0:
+            # skip empty items
+            continue
         if not isinstance(item, torch.Tensor):
+            # put non-tensors into a tensor
             item = torch.LongTensor(item)
         if left_padded:
             # place at end
-            output[i, t - lens[i]:] = item
+            output[i, t - length:] = item
         else:
             # place at beginning
-            output[i, :lens[i]] = item
+            output[i, :length] = item
 
     if use_cuda:
         output = output.cuda()
@@ -998,10 +1008,15 @@ def padded_3d(tensors, pad_idx=0, use_cuda=0):
     b = max(len(row) for row in tensors)
     c = max(len(item) for row in tensors for item in row)
 
+    # pad empty tensors
+    c = max(c, 1)
+
     output = torch.LongTensor(a, b, c).fill_(pad_idx)
 
     for i, row in enumerate(tensors):
         for j, item in enumerate(row):
+            if len(item) == 0:
+                continue
             if not isinstance(item, torch.Tensor):
                 item = torch.LongTensor(item)
             output[i, j, :len(item)] = item

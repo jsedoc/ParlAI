@@ -8,10 +8,13 @@
 """Basic example which iterates through the tasks specified and
 checks them for offensive language.
 
-For example:
-`python parlai/scripts/detect_offensive_language.py -t "convai_chitchat"
---display-examples True -dt train:ordered`
-"""
+Examples
+--------
+
+.. code-block:: shell
+
+  python -m parlai.scripts.detect_offensive_language -t "convai_chitchat" --display-examples True
+"""  # noqa: E501
 from parlai.core.params import ParlaiParser
 from parlai.core.agents import create_agent
 from parlai.core.worlds import create_task
@@ -22,7 +25,7 @@ import random
 
 def setup_args(parser=None):
     if parser is None:
-        parser = ParlaiParser(True, True)
+        parser = ParlaiParser(True, True, 'Check task for offensive language')
     # Get command line arguments
     parser.add_argument('-ltim', '--log-every-n-secs', type=float, default=2)
     parser.add_argument('-d', '--display-examples', type='bool', default=False)

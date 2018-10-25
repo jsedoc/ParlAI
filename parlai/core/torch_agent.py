@@ -8,12 +8,13 @@
 """General utility code for building PyTorch-based agents in ParlAI.
 
 Contains the following main utilities:
-- TorchAgent class which serves as a useful parent class for other model agents
-- Batch namedtuple which is the input type of the main abstract methods of
+
+* TorchAgent class which serves as a useful parent class for other model agents
+* Batch namedtuple which is the input type of the main abstract methods of
   the TorchAgent class
-- Output namedtuple which is the expected output type of the main abstract
+* Output namedtuple which is the expected output type of the main abstract
   methods of the TorchAgent class
-- Beam class which provides some generic beam functionality for classes to use
+* Beam class which provides some generic beam functionality for classes to use
 
 See below for documentation on each specific tool.
 """
@@ -31,8 +32,8 @@ except ImportError as e:
 
 
 from torch import optim
-from collections import deque, namedtuple
-import pickle
+from collections import deque, namedtuple, Counter
+import json
 import random
 import math
 from operator import attrgetter
@@ -193,9 +194,11 @@ class TorchAgent(Agent):
             help='Suggest model should employ multiple GPUs. Not all models '
                  'respect this flag.')
         gpugroup.add_argument(
-            '--no-cuda', type='bool', default=False,
+            '--no-cuda', default=False, action='store_true', dest='no_cuda',
             help='disable GPUs even if available. otherwise, will use GPUs if '
                  'available on the device.')
+
+        cls.dictionary_class().add_cmdline_args(argparser)
 
     def __init__(self, opt, shared=None):
         """Initialize agent."""
@@ -250,7 +253,7 @@ class TorchAgent(Agent):
         self.rank_candidates = opt['rank_candidates']
         self.add_person_tokens = opt.get('person_tokens', False)
 
-    def _init_optim(self, params, optim_states=None, saved_optim_type=None):
+    def init_optim(self, params, optim_states=None, saved_optim_type=None):
         """Initialize optimizer with model parameters.
 
         :param params:       parameters from the model, for example:
@@ -462,6 +465,82 @@ class TorchAgent(Agent):
         else:
             return vec[:truncate]
 
+    def _set_text_vec(self, obs, truncate, split_lines):
+        """Sets the 'text_vec' field in the observation.
+
+        Useful to override to change vectorization behavior"""
+
+        if 'text_vec' in obs:
+            # check truncation of pre-computed vectors
+            obs['text_vec'] = self._check_truncate(obs['text_vec'], truncate)
+            if split_lines and 'memory_vecs' in obs:
+                obs['memory_vecs'] = [self._check_truncate(m, truncate)
+                                      for m in obs['memory_vecs']]
+        elif 'text' in obs:
+            # convert 'text' into tensor of dictionary indices
+            # we don't add start and end to the input
+            if split_lines:
+                # if split_lines set, we put most lines into memory field
+                obs['memory_vecs'] = []
+                for line in obs['text'].split('\n'):
+                    obs['memory_vecs'].append(
+                        self._vectorize_text(line, truncate=truncate))
+                # the last line is treated as the normal input
+                obs['text_vec'] = obs['memory_vecs'].pop()
+            else:
+                obs['text_vec'] = self._vectorize_text(obs['text'],
+                                                       truncate=truncate)
+        return obs
+
+    def _set_label_vec(self, obs, add_start, add_end, truncate):
+        """Sets the 'labels_vec' field in the observation.
+
+        Useful to override to change vectorization behavior"""
+
+        # convert 'labels' or 'eval_labels' into vectors
+        if 'labels' in obs:
+            label_type = 'labels'
+        elif 'eval_labels' in obs:
+            label_type = 'eval_labels'
+        else:
+            label_type = None
+
+        if label_type is None:
+            return
+
+        elif label_type + '_vec' in obs:
+            # check truncation of pre-computed vector
+            obs[label_type + '_vec'] = self._check_truncate(
+                obs[label_type + '_vec'], truncate)
+        else:
+            # pick one label if there are multiple
+            lbls = obs[label_type]
+            label = lbls[0] if len(lbls) == 1 else self.random.choice(lbls)
+            vec_label = self._vectorize_text(label, add_start, add_end,
+                                             truncate, False)
+            obs[label_type + '_vec'] = vec_label
+            obs[label_type + '_choice'] = label
+
+        return obs
+
+    def _set_label_cands_vec(self, obs, add_start, add_end, truncate):
+        """Sets the 'label_candidates_vec' field in the observation.
+
+        Useful to override to change vectorization behavior"""
+
+        if 'label_candidates_vecs' in obs:
+            if truncate is not None:
+                # check truncation of pre-computed vectors
+                vecs = obs['label_candidates_vecs']
+                for i, c in enumerate(vecs):
+                    vecs[i] = self._check_truncate(c, truncate)
+        elif self.rank_candidates and 'label_candidates' in obs:
+            obs['label_candidates'] = list(obs['label_candidates'])
+            obs['label_candidates_vecs'] = [
+                self._vectorize_text(c, add_start, add_end, truncate, False)
+                for c in obs['label_candidates']]
+        return obs
+
     def vectorize(self, obs, add_start=True, add_end=True, truncate=None,
                   split_lines=False):
         """Make vectors out of observation fields and store in the observation.
@@ -485,62 +564,9 @@ class TorchAgent(Agent):
                             vector for input text, one for each substring after
                             splitting on newlines.
         """
-        if 'text_vec' in obs:
-            # check truncation of pre-computed vectors
-            obs['text_vec'] = self._check_truncate(obs['text_vec'], truncate)
-            if split_lines and 'memory_vecs' in obs:
-                obs['memory_vecs'] = [self._check_truncate(m, truncate)
-                                      for m in obs['memory_vecs']]
-        elif 'text' in obs:
-            # convert 'text' into tensor of dictionary indices
-            # we don't add start and end to the input
-            if split_lines:
-                # if split_lines set, we put most lines into memory field
-                obs['memory_vecs'] = []
-                for line in obs['text'].split('\n'):
-                    obs['memory_vecs'].append(
-                        self._vectorize_text(line, truncate=truncate))
-                # the last line is treated as the normal input
-                obs['text_vec'] = obs['memory_vecs'].pop()
-            else:
-                obs['text_vec'] = self._vectorize_text(obs['text'],
-                                                       truncate=truncate)
-
-        # convert 'labels' or 'eval_labels' into vectors
-        if 'labels' in obs:
-            label_type = 'labels'
-        elif 'eval_labels' in obs:
-            label_type = 'eval_labels'
-        else:
-            label_type = None
-
-        if label_type is None:
-            pass
-        elif label_type + '_vec' in obs:
-            # check truncation of pre-computed vector
-            obs[label_type + '_vec'] = self._check_truncate(
-                obs[label_type + '_vec'], truncate)
-        else:
-            # pick one label if there are multiple
-            lbls = obs[label_type]
-            label = lbls[0] if len(lbls) == 1 else self.random.choice(lbls)
-            vec_label = self._vectorize_text(label, add_start, add_end,
-                                             truncate, False)
-            obs[label_type + '_vec'] = vec_label
-            obs[label_type + '_choice'] = label
-
-        if 'label_candidates_vecs' in obs:
-            if truncate is not None:
-                # check truncation of pre-computed vectors
-                vecs = obs['label_candidates_vecs']
-                for i, c in enumerate(vecs):
-                    vecs[i] = self._check_truncate(c, truncate)
-        elif self.rank_candidates and 'label_candidates' in obs:
-            obs['label_candidates'] = list(obs['label_candidates'])
-            obs['label_candidates_vecs'] = [
-                self._vectorize_text(c, add_start, add_end, truncate, False)
-                for c in obs['label_candidates']]
-
+        self._set_text_vec(obs, truncate, split_lines)
+        self._set_label_vec(obs, add_start, add_end, truncate)
+        self._set_label_cands_vec(obs, add_start, add_end, truncate)
         return obs
 
     def batchify(self, obs_batch, sort=False,
@@ -783,11 +809,10 @@ class TorchAgent(Agent):
                     torch.save(states, write)
 
                 # save opt file
-                with open(path + ".opt", 'wb') as handle:
+                with open(path + '.opt', 'w') as handle:
                     if hasattr(self, 'model_version'):
                         self.opt['model_version'] = self.model_version()
-                    pickle.dump(self.opt, handle,
-                                protocol=pickle.HIGHEST_PROTOCOL)
+                    json.dump(self.opt, handle)
 
     def load(self, path):
         """Return opt and model states.
@@ -861,7 +886,7 @@ class Beam(object):
     """Generic beam class. It keeps information about beam_size hypothesis."""
 
     def __init__(self, beam_size, min_length=3, padding_token=0, bos_token=1,
-                 eos_token=2, min_n_best=3, cuda='cpu'):
+                 eos_token=2, min_n_best=3, cuda='cpu', block_ngram=0):
         """Instantiate Beam object.
 
         :param beam_size: number of hypothesis in the beam
@@ -897,6 +922,12 @@ class Beam(object):
         self.eos_top_ts = None
         self.n_best_counter = 0
         self.min_n_best = min_n_best
+        self.block_ngram = block_ngram
+
+    @staticmethod
+    def find_ngrams(input_list, n):
+        """Get list of ngrams with context length n-1"""
+        return list(zip(*[input_list[i:] for i in range(n)]))
 
     def get_output_from_current_step(self):
         """Get the outputput at the current step."""
@@ -924,6 +955,20 @@ class Beam(object):
             beam_scores = (softmax_probs +
                            self.scores.unsqueeze(1).expand_as(softmax_probs))
             for i in range(self.outputs[-1].size(0)):
+                current_hypo = [ii.tokenid.item() for ii in
+                                self.get_partial_hyp_from_tail(
+                                len(self.outputs) - 1, i)][::-1][1:]
+                if self.block_ngram > 0:
+                    current_ngrams = []
+                    for ng in range(self.block_ngram):
+                        ngrams = Beam.find_ngrams(current_hypo, ng)
+                        if len(ngrams) > 0:
+                            current_ngrams.extend(ngrams)
+                    counted_ngrams = Counter(current_ngrams)
+                    if any(v > 1 for k, v in counted_ngrams.items()):
+                        # block this hypothesis hard
+                        beam_scores[i] = -NEAR_INF
+
                 #  if previous output hypo token had eos
                 # we penalize those word probs to never be chosen
                 if self.outputs[-1][i] == self.eos:
@@ -1004,6 +1049,24 @@ class Beam(object):
         hypothesis = torch.stack(list(reversed(hypothesis)))
 
         return hypothesis
+
+    def get_partial_hyp_from_tail(self, ts, hypid):
+        hypothesis_tail = self.HypothesisTail(
+            timestep=ts,
+            hypid=torch.Tensor([hypid]).long(),
+            score=self.all_scores[ts][hypid],
+            tokenid=self.outputs[ts][hypid])
+        hyp_idx = []
+        endback = hypothesis_tail.hypid
+        for i in range(hypothesis_tail.timestep, -1, -1):
+            hyp_idx.append(self.HypothesisTail(
+                timestep=i,
+                hypid=endback,
+                score=self.all_scores[i][endback],
+                tokenid=self.outputs[i][endback]))
+            endback = self.bookkeep[i - 1][endback]
+
+        return hyp_idx
 
     def get_rescored_finished(self, n_best=None):
         """Return finished hypotheses in rescored order.

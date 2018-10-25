@@ -7,13 +7,17 @@
 # of patent rights can be found in the PATENTS file in the same directory.
 """Basic example which allows local human keyboard input to talk to a trained model.
 
-For example:
-`python examples/interactive.py -m drqa -mf "models:drqa/squad/model"`
+Examples
+--------
 
-Then enter something like:
-"Bob is Blue.\nWhat is Bob?"
-as the user input (or in general for the drqa model, enter
-a context followed by '\n' followed by a question all as a single input.)
+.. code-block:: shell
+
+  python examples/interactive.py -m drqa -mf "models:drqa/squad/model"
+
+When prompted, enter something like: ``Bob is Blue.\\nWhat is Bob?``
+
+Input is often model or task specific, but in drqa, it is always
+``context '\\n' question``.
 """
 from parlai.core.params import ParlaiParser
 from parlai.core.agents import create_agent
@@ -25,7 +29,7 @@ import random
 
 def setup_args(parser=None):
     if parser is None:
-        parser = ParlaiParser(True, True)
+        parser = ParlaiParser(True, True, 'Interactive chat with a model')
     parser.add_argument('-d', '--display-examples', type='bool', default=False)
     parser.add_argument('--display-prettify', type='bool', default=False,
                         help='Set to use a prettytable when displaying '

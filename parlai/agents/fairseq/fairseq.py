@@ -6,22 +6,43 @@
 # LICENSE file in the root directory of this source tree. An additional grant
 # of patent rights can be found in the PATENTS file in the same directory.
 
+"""
+ParlAI has limited support for using models from
+`Fairseq <https://github.com/pytorch/fairseq>`_. Fairseq often supports more
+experimental seq2seq architectures with fast fp16 training.
+
+Fairseq models can be used for many default tasks by combining a
+``--arch`` flag. For example:
+
+`python -m parlai.scripts.train -t convai2 -m fairseq -a transformer`
+"""
+
+
 from parlai.core.dict import DictionaryAgent
 from parlai.core.utils import argsort, padded_tensor
 
 try:
     from fairseq import models, optim, criterions
+    # this is a hack around versioning check because fairseq doesn't
+    # announce version numbers yet
+    # fairseq 0.5.0 has fp16_trainer, 0.6.0 does not
+    try:
+        from fairseq import fp16_trainer  # noqa: F401
+    except ImportError:
+        pass
+    else:
+        raise ImportError
 except ImportError:
     raise ImportError(
         "Please run \"pip install -U 'git+https://github.com/pytorch/"
-        "fairseq.git@v0.5.0#egg=fairseq'\""
+        "fairseq.git@v0.6.0#egg=fairseq'\""
     )
-from fairseq import trainer, fp16_trainer
+from fairseq import trainer
 from fairseq.sequence_generator import SequenceGenerator
 from fairseq.sequence_scorer import SequenceScorer
 from fairseq import options
 from fairseq.tasks.fairseq_task import FairseqTask
-from fairseq.utils import convert_padding_direction
+from fairseq.utils import convert_padding_direction, load_model_state
 from fairseq.meters import AverageMeter
 
 from parlai.core.torch_agent import TorchAgent, Output
@@ -32,7 +53,7 @@ import argparse
 import torch
 import os
 import numpy as np
-import pickle
+import json
 from collections import defaultdict
 
 
@@ -202,14 +223,6 @@ class _ParlaiTask(FairseqTask):
 class FairseqAgent(TorchAgent):
     """Generic wrapper around fairseq for use in ParlAI"""
 
-    DEFAULT_OPTIONS = {
-        "adam_betas": "(0.9,0.98)",
-        "optimizer": "adam",
-        "clip_norm": 0.1,
-        "lr": 3e-4,
-        "arch": "transformer_iwslt_de_en",
-    }
-
     metrics = {}
 
     @classmethod
@@ -217,6 +230,18 @@ class FairseqAgent(TorchAgent):
         """Add command-line arguments specifically for this agent."""
         # first we need to add the general torch agent operations
         TorchAgent.add_cmdline_args(argparser)
+        # Dictionary construction stuff. Using the subclass in case we end up
+        # needing any fairseq specific things
+        cls.dictionary_class().add_cmdline_args(argparser)
+
+        # let's store any defaults that were overridden
+        old_defaults = argparser._defaults
+        if 'clip_norm' not in old_defaults:
+            # fairseq has a few awful defaults
+            old_defaults['clip_norm'] = 1.0
+        if 'optimizer' not in old_defaults:
+            old_defaults['optimizer'] = 'adam'
+            old_defaults['adam_betas'] = '(0.9,0.98)'
 
         agent = argparser.add_argument_group('Fairseq Arguments')
         agent.add_argument(
@@ -224,6 +249,12 @@ class FairseqAgent(TorchAgent):
             default=False,
             type='bool',
             help='Use fp16 training'
+        )
+        agent.add_argument(
+            '--fp16-init-scale',
+            default=2**7,
+            type=int,
+            help='default FP16 loss scale'
         )
         agent.add_argument(
             '--seed',
@@ -240,16 +271,13 @@ class FairseqAgent(TorchAgent):
             help='Skips test time beam search. Much faster if you only need PPL',
         )
 
-        # Dictionary construction stuff. Using the subclass in case we end up
-        # needing any fairseq specific things
-        cls.dictionary_class().add_cmdline_args(argparser)
-
         # Check subargs for generation, optimizers, criterions, archs, etc
         options.add_generation_args(argparser)
         options.add_optimization_args(argparser)
+        options.add_checkpoint_args(argparser)
 
-        # make sure we set defaults according to the model before parsing
-        argparser.set_defaults(**cls.DEFAULT_OPTIONS)
+        # restore any user set defaults that fairseq possibly overrode
+        argparser.set_defaults(**old_defaults)
         known_args = argparser.parse_known_args(nohelp=True)[0]
 
         if hasattr(known_args, "optimizer"):
@@ -275,8 +303,8 @@ class FairseqAgent(TorchAgent):
                 a.default = None
                 break
 
-        # make sure we set defaults according to parlai model before parsing
-        argparser.set_defaults(**cls.DEFAULT_OPTIONS)
+        # once again restore any user-set defaults
+        argparser.set_defaults(**old_defaults)
         known_args = argparser.parse_known_args(nohelp=True)[0]
 
         if hasattr(known_args, "arch") and known_args.arch is not None:
@@ -292,8 +320,8 @@ class FairseqAgent(TorchAgent):
             )
             criterions.CRITERION_REGISTRY[known_args.criterion].add_args(crit_group)
 
-        # As one final check, let's make sure we set defaults correctly
-        argparser.set_defaults(**cls.DEFAULT_OPTIONS)
+        # one last time, restore any user set defaults
+        argparser.set_defaults(**old_defaults)
 
     @staticmethod
     def dictionary_class():
@@ -350,19 +378,17 @@ class FairseqAgent(TorchAgent):
             # set up the grader and the trainer
             self.criterion = criterions.build_criterion(self.args, self.task)
 
-            if getattr(self.args, 'fp16', None):
-                self.trainer = fp16_trainer.FP16Trainer(
-                    self.args, self.task, self.model, self.criterion
-                )
-            else:
-                # TODO: we might choose to add a --no-fp16 opt in the future to
-                # explicitly disable fp16 instead
-                if torch.cuda.get_device_capability(0)[0] >= 7:
-                    print("Heads up: using --fp16 could be a lot faster!")
+            # TODO: we might choose to add a --no-fp16 opt in the future to
+            # explicitly disable fp16 instead
+            if not self.args.fp16 and torch.cuda.get_device_capability(0)[0] >= 7:
+                print("Heads up: using --fp16 could be a lot faster!")
+            if self.use_cuda:
                 self.trainer = trainer.Trainer(
-                    self.args, self.task, self.model, self.criterion
+                    self.args, self.task, self.model, self.criterion, None,
                 )
-            self.trainer._build_optimizer()
+                self.trainer._build_optimizer()
+            else:
+                self.trainer = None
 
             # if the model already existed, let's preload it and the trainer
             if model_file_exists:
@@ -425,16 +451,19 @@ class FairseqAgent(TorchAgent):
             return
         self.trainer.save_checkpoint(path, {'opt': self.opt, 'epoch': 0})
         # Parlai expects options to also be saved
-        with open(path + ".opt", 'wb') as handle:
+        with open(path + '.opt', 'w') as handle:
             # overridden options shouldn't be stored, only the main ones
             if 'override' in self.opt:
                 del self.opt['override']
-            pickle.dump(self.opt, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            json.dump(self.opt, handle)
 
     def load(self, path):
         """Load using fairseq's checkpointing."""
-        old_options = self.trainer.load_checkpoint(path)
-        self._check_opts_unchanged(old_options, self.opt)
+        if self.trainer:
+            old_options = self.trainer.load_checkpoint(path)
+            self._check_opts_unchanged(old_options, self.opt)
+        else:
+            load_model_state(path, self.model)
 
     def shutdown(self):
         if not hasattr(self, 'trainer'):
@@ -458,6 +487,10 @@ class FairseqAgent(TorchAgent):
         return super().batchify(obs_batch, sort=True, is_valid=_is_nonempty_observation)
 
     def _update_metrics(self, metrics, sample):
+        if metrics is None:
+            # probably got an overflow in fp16 mode. don't count this sample
+            return
+
         bsz = len(sample['target'])
         ntok = sample['ntokens']
         ssize = metrics['sample_size']
@@ -485,10 +518,10 @@ class FairseqAgent(TorchAgent):
         if batch.text_vec is None:
             return
         self.is_training = True
-        samples = self._make_sample(batch.text_vec, batch.label_vec)
+        sample = self._make_sample(batch)
         self.model.train()
-        metrics = self.trainer.train_step(samples)
-        self._update_metrics(metrics, samples)
+        metrics = self.trainer.train_step([sample])
+        self._update_metrics(metrics, sample)
 
     def eval_step(self, batch):
         """Process batch of inputs.
@@ -502,9 +535,9 @@ class FairseqAgent(TorchAgent):
         if batch.text_vec is None:
             return
         self.is_training = False
-        samples = self._make_sample(batch.text_vec, batch.label_vec)
+        samples = self._make_sample(batch)
         self.model.eval()
-        if batch.label_vec is not None:
+        if batch.label_vec is not None and self.trainer is not None:
             # Interactive mode won't have a gold label
             metrics = self.trainer.valid_step(samples)
             self._update_metrics(metrics, samples)
@@ -531,7 +564,7 @@ class FairseqAgent(TorchAgent):
                 xs = xs[:, :batch.text_lengths[i]]
                 # and appropriately pack the outputs
                 ys, _ = padded_tensor(cands, self.NULL_IDX, self.use_cuda)
-                s = self._make_sample(xs, ys)
+                s = self._make_sample(xs=xs, ys=ys)
                 # perform the actual grading, extract the scores
                 scored = list(self.scorer.score_batched_itr([s], cuda=self.use_cuda))
                 scores = [s[3][0]['score'].item() for s in scored]
@@ -557,11 +590,13 @@ class FairseqAgent(TorchAgent):
         return Output(generated_output, reranked_cands)
 
     def _generate(self, samples):
-        src_tokens = samples["net_input"]["src_tokens"]
-        src_lengths = samples["net_input"]["src_lengths"]
-        gens = self.generator.generate(src_tokens, src_lengths, maxlen=64)
+        no_prev_token = {
+            k: v for k, v in samples['net_input'].items() if k != 'prev_output_tokens'
+        }
+        gens = self.generator.generate(no_prev_token, maxlen=64)
+        bsz = samples['net_input']['src_tokens'].size(0)
         responses = []
-        for i in range(len(src_tokens)):
+        for i in range(bsz):
             beams = gens[i]
             selected = max(beams, key=lambda x: x["score"])
             tokens = selected["tokens"]
@@ -612,8 +647,9 @@ class FairseqAgent(TorchAgent):
             return
         # We need to reset everything
         self.meters.clear()
-        for k in self.trainer.meters:
-            self.trainer.meters[k].reset()
+        if self.trainer:
+            for k in self.trainer.meters:
+                self.trainer.meters[k].reset()
 
     def receive_metrics(self, metrics_dict):
         """Update lr scheduler with validation loss."""
@@ -632,10 +668,17 @@ class FairseqAgent(TorchAgent):
         result[:, 1:] = ys[:, :-1]
         return result
 
-    def _make_sample(self, xs, ys):
+    def _make_sample(self, batch=None, xs=None, ys=None):
         """Generate a sample object that Fairseq expects."""
         # add extra info to samples
-        # TODO: should the right/left padding thing be in torch agent?
+        if batch is None and xs is None:
+            raise ValueError("Must supply either batch or xs")
+        if batch is None and ys is None:
+            raise ValueError("Must supply either batch or ys")
+        if xs is None:
+            xs = batch.text_vec
+        if ys is None:
+            ys = batch.label_vec
         repadded = convert_padding_direction(xs, self.dict.pad(), right_to_left=True)
         sample = {}
         sample["id"] = torch.arange(len(xs) - 1)
