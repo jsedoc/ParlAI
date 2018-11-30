@@ -17,10 +17,10 @@ from torch import optim
 import torch.nn as nn
 import torch.nn.functional as F
 import spacy, tqdm
-nlp = spacy.load('en') # install 'en' model (python3 -m spacy download en)
 import collections
 from collections import defaultdict
 import concurrent.futures
+# from ccg_nlpy import remote_pipeline
 
 
 class CaedAgent(TorchAgent):
@@ -61,6 +61,7 @@ class CaedAgent(TorchAgent):
         super().__init__(opt, shared)
 
         self.id = 'Seq2Seq'
+        self.nlp = spacy.load('en_core_web_lg')
 
         if not shared:
             # set up model from scratch
@@ -121,37 +122,97 @@ class CaedAgent(TorchAgent):
         return shared
 
     # only works if text is of the form "Can I see your AMA ?" with a space before punctuation
-    # do we want A: in the final result? right now it is
-    def process_line(text):
-        l = text.split(":", 1)
-        if len(l) < 2:
-            return text
+    # def process_line(self, text):
+    #     target_ents = ["ORG", "PERSON"]
+    #     print('\n')
+
+    #     print('ORIGINAL TEXT :' + text + '\n')
+
+    #     l = text
+
+    #     word_to_ent = dict()
+    #     ent_counts = dict()
+
+    #     spdoc = self.nlp(l)
+                    
+    #     for e in spdoc.ents:
+    #         word_to_ent[e.as_doc().text.strip()] = e.label_
+
+    #     for word in word_to_ent:
+    #         #print(word + "..." + word_to_ent[word])
+    #         ent = word_to_ent[word]
+    #         previous_count = 0
+    #         if ent in ent_counts:
+    #             previous_count = ent_counts[ent]
+    #         ent_counts[ent] = previous_count + 1
+    #         word_to_ent[word] = word_to_ent[word] + '@' + str(ent_counts[ent])
+            
+    #     for word in word_to_ent:
+    #       if (word != ''):
+    #         text = text.replace(word, word_to_ent[word])
+        
+    #     print('CONVERTED TEXT :' + text + '\n')
+    #     return text
+
+    def process_line(self, text):
+    
+        # first preprocess using database of movie labels
+      
+        target_ents = ["ORG", "PERSON"]
+
+        l = text
+
+        if "__null__" in text:
+        	return ""
+
+        print('\n')
+        print('ORIGINAL TEXT :' + text + '\n')
 
         word_to_ent = dict()
         ent_counts = dict()
+        movie_labels = ['PER']
+        
+        # movie ents
+        # p = remote_pipeline.RemotePipeline()
 
-        l = l[1].strip()
+        # doc = p.doc(text)
+        
+        # if doc != None:
+        #   ner_view = doc.get_ner_conll
+        #   if ner_view.get_cons() != None:
+        #     for ner in ner_view:
+        #       print(ner['label'])
+        #       if ner['label'] in movie_labels:
+        #         word_to_ent[ner['tokens']] = ner['label']
+        
+        # end of movie ents
 
-        spdoc = nlp(l)
+        spdoc = self.nlp(l)
+                    
         for e in spdoc.ents:
-            word_to_ent[e.as_doc().text.strip()] = e.label_
+            #  word -> entity
+            word = e.as_doc().text.strip()
+            if word not in word_to_ent:
+              word_to_ent[word] = e.label_
 
         for word in word_to_ent:
             ent = word_to_ent[word]
-            previous_count = 0;
+            previous_count = 0
             if ent in ent_counts:
                 previous_count = ent_counts[ent]
             ent_counts[ent] = previous_count + 1
             word_to_ent[word] = word_to_ent[word] + '@' + str(ent_counts[ent])
+            
+        for word in word_to_ent:
+          if (word != ''):
+            text = text.replace(word, word_to_ent[word])
+          
+        print('CONVERTED TEXT :' + text + '\n')
+        return text
 
-        processed_text = ''
-        for word in text.split():
-            if word in word_to_ent:
-                processed_text = processed_text + word_to_ent[word] + ' '
-            else:
-                processed_text = processed_text + word + ' '
-        processed_text.strip()
-        return processed_text
+    def get_tmdb_ids(self):
+    	data = json.loads('http://files.tmdb.org/p/exports/movie_ids_04_28_2017.json.gz')
+        
 
     def v2t(self, vector):
         """Convert vector to text.
@@ -167,7 +228,7 @@ class CaedAgent(TorchAgent):
                     break
                 else:
                     output_tokens.append(token)
-            return self.dict.vec2txt(output_tokens)
+            return self.process_line(self.dict.vec2txt(output_tokens))
         elif vector.dim() == 2:
             return [self.v2t(vector[i]) for i in range(vector.size(0))]
         raise RuntimeError('Improper input to v2t with dimensions {}'.format(
@@ -182,8 +243,8 @@ class CaedAgent(TorchAgent):
         # 'your persona: i like to remodel homes.\nyour persona: i like to go hunting.\nyour persona: i like to shoot a bow.\nyour persona: my favorite holiday is halloween.\nhi , how are you doing ? i am getting ready to do some cheetah chasing to stay in shape .'
         # (Pdb) p args[0]['labels']
         # ('you must be very fast . hunting is one of my favorite hobbies .',)
-        args[0]['text'] = process_line(args[0]['text'])
-        
+        args[0]['text'] = self.process_line(args[0]['text'])
+
         return super().vectorize(*args, **kwargs)
 
     def train_step(self, batch):
