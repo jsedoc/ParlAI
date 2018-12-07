@@ -12,7 +12,7 @@ Its goal is to provide researchers:
 
 Many [tasks](https://github.com/facebookresearch/ParlAI/blob/master/parlai/tasks/task_list.py) are supported, including popular datasets such as [SQuAD](https://rajpurkar.github.io/SQuAD-explorer/), [bAbI tasks](https://arxiv.org/abs/1502.05698), [MS MARCO](http://www.msmarco.org/), [MCTest](https://www.microsoft.com/en-us/research/publication/mctest-challenge-dataset-open-domain-machine-comprehension-text/), [WikiQA](https://www.microsoft.com/en-us/download/details.aspx?id=52419), [WebQuestions](http://www.aclweb.org/anthology/D13-1160), [SimpleQuestions](https://arxiv.org/abs/1506.02075), [WikiMovies](https://arxiv.org/abs/1606.03126), [QACNN & QADailyMail](https://arxiv.org/abs/1506.03340), [CBT](https://arxiv.org/abs/1511.02301), [BookTest](https://arxiv.org/abs/1610.00956), [bAbI Dialog tasks](https://arxiv.org/abs/1605.07683), [Ubuntu Dialog](https://arxiv.org/abs/1506.08909), [OpenSubtitles](http://opus.lingfil.uu.se/OpenSubtitles.php), [Cornell Movie](https://www.cs.cornell.edu/~cristian/Cornell_Movie-Dialogs_Corpus.html), [VQA-COCO2014](http://visualqa.org/), [VisDial](https://arxiv.org/abs/1611.08669) and [CLEVR](http://cs.stanford.edu/people/jcjohns/clevr/). See [here](https://github.com/facebookresearch/ParlAI/blob/master/parlai/tasks/task_list.py) for the current complete task list.
 
-Included are examples of training neural models with [PyTorch](http://pytorch.org/) and [Lua Torch](http://torch.ch/), with batch training on GPU or hogwild training on CPUs. Using [Tensorflow](https://www.tensorflow.org/) instead is also straightforward.
+Included are examples of training neural models with [PyTorch](http://pytorch.org/), with batch training on GPU or hogwild training on CPUs. Using [Tensorflow](https://www.tensorflow.org/) or other frameworks instead is also straightforward.
 
 Our aim is for the number of tasks and agents that train on them to grow in a community-based way.
 
@@ -269,13 +269,8 @@ Each task folder contains:
 - **agents.py** file which contains default or special teacher classes used by core.create_task to instantiate these classes from command-line arguments (if desired).
 - **worlds.py** file can optionally be added for tasks that need to define new/complex environments.
 
-To add your own task (see the [tutorial](http://www.parl.ai/static/docs/tutorial_task.html) for far more details):
-- (optional) implement build.py to download any needed data
-- implement agents.py, with at least a DefaultTeacher (extending Teacher or one of its children)
-    - if your data is in [FB Dialog format](https://github.com/facebookresearch/ParlAI/blob/master/parlai/core/fbdialog_teacher.py), subclass FbDialogTeacher
-    - if not...
-        - if your data consists of fixed logs, you can use extend DialogTeacher and thus core.data.TextData, in which case you just need to write your own setup_data function which provides an iterable over the data according to the format described in core.data
-        - if your data uses other fields, write your own act() method which provides observations from your task each time it's called
+To add your own task, see the [tutorial](http://www.parl.ai/static/docs/tutorial_task.html).
+
 
 ### MTurk
 

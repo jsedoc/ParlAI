@@ -61,10 +61,12 @@ class MockSocket():
         self.ws = None
         self.should_heartbeat = True
         self.fake_workers = []
+        self.port = None
         self.launch_socket()
         self.handlers = {}
         while self.ws is None:
             time.sleep(0.05)
+        time.sleep(1)
 
     def send(self, packet):
         self.ws.send_message_to_all(packet)
@@ -108,7 +110,13 @@ class MockSocket():
             self.disconnected = True
 
         def run_socket(*args):
-            self.ws = WebsocketServer(3030, host='127.0.0.1')
+            port = 3030
+            while self.port is None:
+                try:
+                    self.ws = WebsocketServer(port, host='127.0.0.1')
+                    self.port = port
+                except OSError:
+                    port += 1
             self.ws.set_fn_client_left(on_disconnect)
             self.ws.set_fn_new_client(on_connect)
             self.ws.set_fn_message_received(on_message)
@@ -209,7 +217,7 @@ class TestMTurkManagerUnitFunctions(unittest.TestCase):
             is_test=True,
         )
         self.mturk_manager._init_state()
-        self.mturk_manager.port = 3030
+        self.mturk_manager.port = self.fake_socket.port
         self.agent_1 = MTurkAgent(self.opt, self.mturk_manager, TEST_HIT_ID_1,
                                   TEST_ASSIGNMENT_ID_1, TEST_WORKER_ID_1)
         self.agent_2 = MTurkAgent(self.opt, self.mturk_manager, TEST_HIT_ID_2,
@@ -903,6 +911,7 @@ class TestMTurkManagerTimeHandling(unittest.TestCase):
 
     def test_create_work_time_file(self):
         manager = self.mturk_manager
+        manager._should_use_time_logs = mock.MagicMock(return_value=True)
 
         file_path = os.path.join(parent_dir,
                                  MTurkManagerFile.TIME_LOGS_FILE_NAME)
@@ -946,6 +955,8 @@ class TestMTurkManagerTimeHandling(unittest.TestCase):
         manager.opt['max_time'] = 10000
         # Ensure a worker below the time limit isn't blocked
         MTurkManagerFile.time.time = mock.MagicMock(return_value=10000)
+        self.mturk_manager._should_use_time_logs = \
+            mock.MagicMock(return_value=True)
         manager._log_working_time(self.agent_1)
         manager.worker_manager.time_block_worker.assert_not_called()
 
@@ -992,6 +1003,8 @@ class TestMTurkManagerLifecycleFunctions(unittest.TestCase):
         topic_arn = 'aws_topic_arn'
         mturk_page_url = 'https://test_mturk_page_url'
         MTurkManagerFile.server_utils.setup_server = \
+            mock.MagicMock(return_value=server_url)
+        MTurkManagerFile.server_utils.setup_legacy_server = \
             mock.MagicMock(return_value=server_url)
 
         # Currently in state created. Try steps that are too soon to work
@@ -1117,7 +1130,7 @@ class TestMTurkManagerConnectedFunctions(unittest.TestCase):
             is_test=True,
         )
         self.mturk_manager._init_state()
-        self.mturk_manager.port = 3030
+        self.mturk_manager.port = self.fake_socket.port
         self.mturk_manager._onboard_new_agent = mock.MagicMock()
         self.mturk_manager._wait_for_task_expirations = mock.MagicMock()
         self.mturk_manager.task_group_id = 'TEST_GROUP_ID'
