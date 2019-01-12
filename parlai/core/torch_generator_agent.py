@@ -461,15 +461,17 @@ class TorchGeneratorAgent(TorchAgent):
             loss /= target_tokens  # average loss per token
             loss.backward()
             self.update_params()
-        except RuntimeError as e:
-            # catch out of memory exceptions during fwd/bck (skip batch)
-            if 'out of memory' in str(e):
-                print('| WARNING: ran out of memory, skipping batch. '
-                      'if this happens frequently, decrease batchsize or '
-                      'truncate the inputs to the model.')
-                self.metrics['total_skipped_batches'] += 1
-            else:
-                raise e
+        except:
+            pass
+        # except RuntimeError as e:
+        #     # catch out of memory exceptions during fwd/bck (skip batch)
+        #     if 'out of memory' in str(e):
+        #         print('| WARNING: ran out of memory, skipping batch. '
+        #               'if this happens frequently, decrease batchsize or '
+        #               'truncate the inputs to the model.')
+        #         self.metrics['total_skipped_batches'] += 1
+        #     else:
+        #         raise e
 
     def _pick_cands(self, cand_preds, cand_inds, cands):
         cand_replies = [None] * len(cands)
