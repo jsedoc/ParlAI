@@ -6,7 +6,7 @@
 from parlai.core.params import ParlaiParser
 from parlai.mturk.core.mturk_manager import MTurkManager
 from worlds import \
-    MTurkCommentBattleStackRankWorld, RoleOnboardWorld, \
+    MTurkPersonalityCaptionsStackRankWorld, RoleOnboardWorld, \
     ExampleGenerator, CHOOSER
 from parlai.tasks.personality_captions.agents import PersonalityCaptionsTeacher
 from task_config import task_config
@@ -85,6 +85,10 @@ def main():
     opt['task'] = os.path.basename(directory_path)
     if 'data_path' not in opt or opt['data_path'] == '':
         opt['data_path'] = os.getcwd() + '/data/' + opt['task']
+    if opt.get('eval_data_path') == '':
+        opt['eval_data_path'] = os.path.join(
+            opt['datapath'],
+            'personality_captions/train.json')
     opt.update(task_config)
 
     mturk_agent_ids = [CHOOSER]
@@ -119,7 +123,7 @@ def main():
         def run_conversation(mturk_manager, opt, workers):
             agents = workers[:]
             conv_idx = mturk_manager.conversation_index
-            world = MTurkCommentBattleStackRankWorld(
+            world = MTurkPersonalityCaptionsStackRankWorld(
                 opt,
                 agents=agents,
                 world_tag='conversation t_{}'.format(conv_idx),

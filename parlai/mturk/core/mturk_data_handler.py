@@ -136,6 +136,7 @@ class MTurkDataHandler():
                 del custom_data['needs-pickle']
             custom_file = os.path.join(target_dir_custom, 'data.json')
             force_dir(custom_file)
+            print('Saving data to {}.'.format(custom_file))
             with open(custom_file, 'w') as outfile:
                 json.dump(custom_data, outfile)
         worker_data = prepped_save_data['worker_data']
@@ -600,7 +601,7 @@ class MTurkDataHandler():
             results = c.fetchone()
             return results
 
-    def get_all_run_data(self, start=0, count=100):
+    def get_all_run_data(self, start=0, count=1000):
         """get all the run data for all task_group_ids."""
         with self.table_access_condition:
             conn = self._get_connection()

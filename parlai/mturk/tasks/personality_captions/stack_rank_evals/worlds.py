@@ -53,11 +53,7 @@ class ExampleGenerator(object):
             opt['compare_key_2'])
         self.examples_idx_stack_path = os.path.join(os.getcwd(), handle)
         build_pc(opt)
-        if opt.get('eval_data_path') != '':
-            data_path = opt.get('eval_data_path')
-        else:
-            data_path = os.path.join(self.opt['datapath'],
-                                     'personality_captions/train.json')
+        data_path = opt.get('eval_data_path')
         with open(data_path) as f:
             self.data = json.load(f)
 
@@ -120,9 +116,9 @@ class RoleOnboardWorld(MTurkOnboardWorld):
             self.episodeDone = True
 
 
-class MTurkCommentBattleStackRankWorld(MultiAgentDialogWorld):
-    """World where an agent observes 5 images and 3 comments about the images,
-       and ranks the comments
+class MTurkPersonalityCaptionsStackRankWorld(MultiAgentDialogWorld):
+    """World where an agent observes 5 images and 2 comments about the images,
+       and chooses the more engaging comment
     """
     def __init__(self, opt, agents=None, shared=None, world_tag='NONE'):
         self.turn_idx = 0
