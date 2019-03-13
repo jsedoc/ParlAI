@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 
-# Copyright (c) 2017-present, Facebook, Inc.
-# All rights reserved.
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree. An additional grant
-# of patent rights can be found in the PATENTS file in the same directory.
+# Copyright (c) Facebook, Inc. and its affiliates.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
 
 """Basic example which iterates through the tasks specified and load/extract
 the image features.
@@ -37,6 +35,7 @@ from parlai.core.worlds import create_task
 def setup_args(parser=None):
     if parser is None:
         parser = ParlaiParser(True, False, 'Load/extract image features')
+    parser.add_pytorch_datateacher_args()
     arg_group = parser.add_argument_group('Image Extraction')
     arg_group.add_argument('--dataset', type=str, default=None,
                            help='Pytorch Dataset; if specified, will save \
